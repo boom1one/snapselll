@@ -1,3 +1,2 @@
-aiogram==3.10.0
-pydantic==2.5.0
-pydantic-core==2.14.0
+flask
+requests
