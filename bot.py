@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 
 # ========== КОНФИГУРАЦИЯ ==========
 TOKEN = "8857819530:AAF_XClRgpje6cZ08HDZMEVGyXqMnVUyqNE"
-CHANNEL_ID = "@SnapSell350"
+CHANNEL_ID = "@testiktiks"
 BASE_URL = f"https://api.telegram.org/bot{TOKEN}"
 
 app = Flask(__name__)
