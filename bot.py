@@ -1,217 +1,283 @@
 import os
-import asyncio
-import logging
+import time
+import threading
+import requests
+import json
+from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
-from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import StatesGroup, State
-from aiogram.fsm.storage.memory import MemoryStorage
 
 # ========== КОНФИГУРАЦИЯ ==========
-TOKEN = os.getenv("8977186531:AAFwl7w9GWT7zDPBWHmTF4KQzD6npHQ8i5U")  # Токен бота (установите в Render)
-CHANNEL_ID = "@SnapSell350"     # ID канала
+TOKEN = "8977186531:AAFwl7w9GWT7zDPBWHmTF4KQzD6npHQ8i5U"
+CHANNEL_ID = "@SnapSell350"
+BASE_URL = f"https://api.telegram.org/bot{TOKEN}"
 
-# ========== ИНИЦИАЛИЗАЦИЯ ==========
-logging.basicConfig(level=logging.INFO)
-storage = MemoryStorage()
-bot = Bot(token=TOKEN)
-dp = Dispatcher(storage=storage)
+app = Flask(__name__)
 
-# Хранилище данных пользователя (в реальном проекте используйте БД)
+# Хранилище данных
 user_data = {}
+user_states = {}
+scheduled_replacements = []
 
-# ========== FSM (МАШИНЫ СОСТОЯНИЙ) ==========
-class PublishStates(StatesGroup):
-    waiting_for_text = State()
-    waiting_for_time = State()
+# ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
+def send_message(chat_id, text, reply_markup=None, parse_mode="Markdown"):
+    """Отправка сообщения"""
+    url = f"{BASE_URL}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": parse_mode
+    }
+    if reply_markup:
+        payload["reply_markup"] = json.dumps(reply_markup)
+    
+    response = requests.post(url, json=payload)
+    return response.json()
 
-class TemplateStates(StatesGroup):
-    waiting_for_new_template = State()
+def edit_message(chat_id, message_id, text, parse_mode="HTML"):
+    """Редактирование сообщения"""
+    url = f"{BASE_URL}/editMessageText"
+    payload = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "text": text,
+        "parse_mode": parse_mode
+    }
+    response = requests.post(url, json=payload)
+    return response.json()
 
-# ========== КЛАВИАТУРЫ ==========
+def delete_message(chat_id, message_id):
+    """Удаление сообщения"""
+    url = f"{BASE_URL}/deleteMessage"
+    payload = {
+        "chat_id": chat_id,
+        "message_id": message_id
+    }
+    response = requests.post(url, json=payload)
+    return response.json()
+
 def get_main_keyboard():
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="📤 Выложить публикацию", callback_data="publish")],
-            [InlineKeyboardButton(text="✏️ Изменить шаблон автозамены", callback_data="change_template")]
+    """Главное меню"""
+    return {
+        "inline_keyboard": [
+            [{"text": "📤 Выложить публикацию", "callback_data": "publish"}],
+            [{"text": "✏️ Изменить шаблон автозамены", "callback_data": "change_template"}]
         ]
-    )
-    return keyboard
+    }
 
-# ========== ХЭНДЛЕРЫ ==========
-@dp.message(Command("start"))
-async def cmd_start(message: types.Message):
-    welcome_text = (
+# ========== ОБРАБОТЧИКИ КОМАНД ==========
+def handle_start(chat_id):
+    """Команда /start"""
+    text = (
         "👋 *Добро пожаловать в бота управления публикациями!*\n\n"
         "Здесь вы можете:\n"
         "• *Выложить публикацию* в канал с автоматической заменой\n"
         "• *Изменить шаблон* для автозамены\n\n"
         "Выберите действие ниже 👇"
     )
-    await message.answer(
-        welcome_text,
-        reply_markup=get_main_keyboard(),
-        parse_mode="Markdown"
-    )
+    send_message(chat_id, text, reply_markup=get_main_keyboard())
 
-@dp.callback_query(F.data == "publish")
-async def start_publish(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.delete()
-    await callback.answer()
-    
-    await state.set_state(PublishStates.waiting_for_text)
-    await callback.message.answer(
+def handle_publish_callback(chat_id):
+    """Начало публикации"""
+    user_states[chat_id] = "waiting_for_text"
+    send_message(
+        chat_id,
         "📝 *Отправьте текст публикации*, который вы хотите выложить в канал.\n\n"
-        "Это может быть любой текст, ссылки, или форматирование.",
-        parse_mode="Markdown"
+        "Это может быть любой текст, ссылки, или форматирование."
     )
 
-@dp.message(PublishStates.waiting_for_text)
-async def get_publish_text(message: types.Message, state: FSMContext):
-    if not message.text:
-        await message.answer("❌ Пожалуйста, отправьте текст сообщением.")
-        return
+def handle_change_template_callback(chat_id):
+    """Начало изменения шаблона"""
+    current_template = user_data.get(chat_id, {}).get("template", "Не установлен")
     
-    await state.update_data(publish_text=message.text)
-    await state.set_state(PublishStates.waiting_for_time)
-    
-    await message.answer(
-        "⏱ *Укажите время в минутах*, через которое публикация заменится на шаблон.\n\n"
-        "Пример: `120` — замена через 2 часа.\n"
-        "Отправьте *только число*.",
-        parse_mode="Markdown"
-    )
-
-@dp.message(PublishStates.waiting_for_time)
-async def get_publish_time(message: types.Message, state: FSMContext):
-    try:
-        delay_minutes = int(message.text.strip())
-        if delay_minutes <= 0:
-            raise ValueError("Время должно быть положительным")
-    except ValueError:
-        await message.answer("❌ Пожалуйста, отправьте *положительное целое число* (количество минут).")
-        return
-    
-    data = await state.get_data()
-    publish_text = data.get("publish_text")
-    
-    if not publish_text:
-        await message.answer("❌ Ошибка: текст публикации не найден. Начните заново /start")
-        await state.clear()
-        return
-    
-    try:
-        sent_message = await bot.send_message(
-            chat_id=CHANNEL_ID,
-            text=publish_text,
-            parse_mode="HTML"
-        )
-        
-        user_id = message.from_user.id
-        if user_id not in user_data:
-            user_data[user_id] = {}
-        
-        user_data[user_id]["last_post"] = {
-            "chat_id": CHANNEL_ID,
-            "message_id": sent_message.message_id,
-            "replace_at": datetime.now() + timedelta(minutes=delay_minutes),
-            "template": user_data.get(user_id, {}).get("template", "⚠️ Этот пост был автоматически заменён по шаблону.")
-        }
-        
-        await message.answer(
-            f"✅ *Публикация успешно выложена!*\n\n"
-            f"🔹 Текст опубликован в канале.\n"
-            f"🔹 Замена произойдет через *{delay_minutes} минут*.\n\n"
-            f"⏳ Таймер запущен!",
-            parse_mode="Markdown",
-            reply_markup=get_main_keyboard()
-        )
-        
-        asyncio.create_task(schedule_post_replacement(user_id, delay_minutes))
-        
-    except Exception as e:
-        logging.error(f"Ошибка публикации: {e}")
-        await message.answer(
-            "❌ *Ошибка при публикации!*\n"
-            "Проверьте, что бот является администратором канала и имеет права на отправку сообщений.",
-            parse_mode="Markdown",
-            reply_markup=get_main_keyboard()
-        )
-    
-    await state.clear()
-
-@dp.callback_query(F.data == "change_template")
-async def change_template_start(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.delete()
-    await callback.answer()
-    
-    current_template = user_data.get(callback.from_user.id, {}).get("template", "Не установлен")
-    
-    await state.set_state(TemplateStates.waiting_for_new_template)
-    await callback.message.answer(
+    user_states[chat_id] = "waiting_for_template"
+    send_message(
+        chat_id,
         f"📝 *Текущий шаблон автозамены:*\n"
         f"`{current_template}`\n\n"
         f"✍️ *Отправьте новый текст шаблона*, на который будут заменяться публикации.\n\n"
         f"Вы можете использовать *HTML-теги* для форматирования:\n"
-        f"`<b>жирный</b>`, `<i>курсив</i>`, `<a href='url'>ссылка</a>`",
-        parse_mode="Markdown"
+        f"`<b>жирный</b>`, `<i>курсив</i>`, `<a href='url'>ссылка</a>`"
     )
 
-@dp.message(TemplateStates.waiting_for_new_template)
-async def save_new_template(message: types.Message, state: FSMContext):
-    if not message.text:
-        await message.answer("❌ Пожалуйста, отправьте текст шаблона.")
-        return
+def handle_text_message(chat_id, text):
+    """Обработка текстовых сообщений"""
+    state = user_states.get(chat_id)
     
-    user_id = message.from_user.id
-    if user_id not in user_data:
-        user_data[user_id] = {}
+    if state == "waiting_for_text":
+        user_data[chat_id] = user_data.get(chat_id, {})
+        user_data[chat_id]["publish_text"] = text
+        
+        user_states[chat_id] = "waiting_for_time"
+        send_message(
+            chat_id,
+            "⏱ *Укажите время в минутах*, через которое публикация заменится на шаблон.\n\n"
+            "Пример: `120` — замена через 2 часа.\n"
+            "Отправьте *только число*."
+        )
     
-    user_data[user_id]["template"] = message.text
+    elif state == "waiting_for_time":
+        try:
+            delay_minutes = int(text.strip())
+            if delay_minutes <= 0:
+                raise ValueError("Время должно быть положительным")
+        except ValueError:
+            send_message(chat_id, "❌ Пожалуйста, отправьте *положительное целое число* (количество минут).")
+            return
+        
+        publish_text = user_data.get(chat_id, {}).get("publish_text")
+        if not publish_text:
+            send_message(chat_id, "❌ Ошибка: текст публикации не найден. Начните заново /start")
+            user_states.pop(chat_id, None)
+            return
+        
+        # Публикуем в канал
+        try:
+            url = f"{BASE_URL}/sendMessage"
+            payload = {
+                "chat_id": CHANNEL_ID,
+                "text": publish_text,
+                "parse_mode": "HTML"
+            }
+            response = requests.post(url, json=payload).json()
+            
+            if response.get("ok"):
+                message_id = response["result"]["message_id"]
+                
+                # Сохраняем данные для замены
+                if chat_id not in user_data:
+                    user_data[chat_id] = {}
+                
+                user_data[chat_id]["last_post"] = {
+                    "message_id": message_id,
+                    "replace_at": datetime.now() + timedelta(minutes=delay_minutes),
+                    "template": user_data.get(chat_id, {}).get("template", "⚠️ Этот пост был автоматически заменён по шаблону.")
+                }
+                
+                # Планируем замену
+                schedule_replacement(chat_id, delay_minutes)
+                
+                send_message(
+                    chat_id,
+                    f"✅ *Публикация успешно выложена!*\n\n"
+                    f"🔹 Текст опубликован в канале.\n"
+                    f"🔹 Замена произойдет через *{delay_minutes} минут*.\n\n"
+                    f"⏳ Таймер запущен!",
+                    reply_markup=get_main_keyboard()
+                )
+                
+                user_states.pop(chat_id, None)
+            else:
+                send_message(
+                    chat_id,
+                    "❌ *Ошибка при публикации!*\n"
+                    "Проверьте, что бот является администратором канала и имеет права на отправку сообщений.",
+                    reply_markup=get_main_keyboard()
+                )
+        except Exception as e:
+            send_message(
+                chat_id,
+                f"❌ Ошибка: {str(e)}",
+                reply_markup=get_main_keyboard()
+            )
     
-    await message.answer(
-        "✅ *Шаблон успешно обновлен!*\n\n"
-        f"📌 Новый шаблон:\n"
-        f"`{message.text}`\n\n"
-        "Теперь все будущие публикации будут заменяться на этот шаблон.",
-        parse_mode="Markdown",
-        reply_markup=get_main_keyboard()
-    )
-    await state.clear()
+    elif state == "waiting_for_template":
+        if chat_id not in user_data:
+            user_data[chat_id] = {}
+        
+        user_data[chat_id]["template"] = text
+        
+        send_message(
+            chat_id,
+            "✅ *Шаблон успешно обновлен!*\n\n"
+            f"📌 Новый шаблон:\n"
+            f"`{text}`\n\n"
+            "Теперь все будущие публикации будут заменяться на этот шаблон.",
+            reply_markup=get_main_keyboard()
+        )
+        user_states.pop(chat_id, None)
 
-# ========== ФОНОВАЯ ЗАДАЧА ЗАМЕНЫ ==========
-async def schedule_post_replacement(user_id: int, delay_minutes: int):
-    await asyncio.sleep(delay_minutes * 60)
+def schedule_replacement(chat_id, delay_minutes):
+    """Планирование замены в отдельном потоке"""
+    def replace_post():
+        time.sleep(delay_minutes * 60)
+        
+        try:
+            if chat_id not in user_data:
+                return
+            
+            post_data = user_data[chat_id].get("last_post")
+            if not post_data:
+                return
+            
+            template = user_data[chat_id].get("template", "⚠️ Этот пост был автоматически заменён по шаблону.")
+            
+            # Редактируем сообщение
+            edit_message(CHANNEL_ID, post_data["message_id"], template)
+            
+            # Удаляем данные о посте
+            del user_data[chat_id]["last_post"]
+            
+        except Exception as e:
+            print(f"Ошибка замены поста: {e}")
+    
+    thread = threading.Thread(target=replace_post)
+    thread.daemon = True
+    thread.start()
+
+# ========== ВЕБХУК ==========
+@app.route("/", methods=["GET", "POST"])
+def webhook():
+    """Обработка входящих обновлений"""
+    if request.method == "GET":
+        return "Bot is running!"
     
     try:
-        if user_id not in user_data:
-            return
+        update = request.get_json()
+        if not update:
+            return jsonify({"status": "ok"})
         
-        post_data = user_data[user_id].get("last_post")
-        if not post_data:
-            return
+        # Обработка сообщений
+        if "message" in update:
+            message = update["message"]
+            chat_id = message["chat"]["id"]
+            
+            if "text" in message:
+                text = message["text"]
+                
+                if text.startswith("/start"):
+                    handle_start(chat_id)
+                else:
+                    handle_text_message(chat_id, text)
         
-        template = user_data[user_id].get("template", "⚠️ Этот пост был автоматически заменён по шаблону.")
+        # Обработка callback'ов
+        elif "callback_query" in update:
+            callback = update["callback_query"]
+            chat_id = callback["message"]["chat"]["id"]
+            data = callback["data"]
+            
+            # Ответ на callback
+            url = f"{BASE_URL}/answerCallbackQuery"
+            requests.post(url, json={"callback_query_id": callback["id"]})
+            
+            # Удаляем сообщение с кнопками
+            delete_message(chat_id, callback["message"]["message_id"])
+            
+            if data == "publish":
+                handle_publish_callback(chat_id)
+            elif data == "change_template":
+                handle_change_template_callback(chat_id)
         
-        await bot.edit_message_text(
-            chat_id=post_data["chat_id"],
-            message_id=post_data["message_id"],
-            text=template,
-            parse_mode="HTML"
-        )
-        
-        logging.info(f"Пост {post_data['message_id']} заменён на шаблон для пользователя {user_id}")
-        del user_data[user_id]["last_post"]
-        
+        return jsonify({"status": "ok"})
     except Exception as e:
-        logging.error(f"Ошибка замены поста: {e}")
+        print(f"Ошибка: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
-# ========== ЗАПУСК БОТА ==========
-async def main():
-    print("🚀 Бот запущен на Render!")
-    await dp.start_polling(bot)
-
+# ========== ЗАПУСК ==========
 if __name__ == "__main__":
-    asyncio.run(main())
+    # Устанавливаем вебхук
+    webhook_url = os.getenv("RENDER_EXTERNAL_URL", "http://localhost:5000")
+    set_webhook_url = f"{BASE_URL}/setWebhook?url={webhook_url}"
+    requests.get(set_webhook_url)
+    
+    print("🚀 Бот запущен!")
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
