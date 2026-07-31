@@ -24,15 +24,14 @@ user_data = {}
 
 # ========== FSM (МАШИНЫ СОСТОЯНИЙ) ==========
 class PublishStates(StatesGroup):
-    waiting_for_text = State()       # Ждем текст публикации
-    waiting_for_time = State()       # Ждем время до замены
+    waiting_for_text = State()
+    waiting_for_time = State()
 
 class TemplateStates(StatesGroup):
-    waiting_for_new_template = State()  # Ждем новый шаблон
+    waiting_for_new_template = State()
 
 # ========== КЛАВИАТУРЫ ==========
 def get_main_keyboard():
-    """Главное меню с двумя кнопками"""
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="📤 Выложить публикацию", callback_data="publish")],
@@ -44,7 +43,6 @@ def get_main_keyboard():
 # ========== ХЭНДЛЕРЫ ==========
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    """Приветствие и главное меню"""
     welcome_text = (
         "👋 *Добро пожаловать в бота управления публикациями!*\n\n"
         "Здесь вы можете:\n"
@@ -60,7 +58,6 @@ async def cmd_start(message: types.Message):
 
 @dp.callback_query(F.data == "publish")
 async def start_publish(callback: types.CallbackQuery, state: FSMContext):
-    """Начинаем процесс публикации"""
     await callback.message.delete()
     await callback.answer()
     
@@ -73,12 +70,10 @@ async def start_publish(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.message(PublishStates.waiting_for_text)
 async def get_publish_text(message: types.Message, state: FSMContext):
-    """Получаем текст публикации"""
     if not message.text:
         await message.answer("❌ Пожалуйста, отправьте текст сообщением.")
         return
     
-    # Сохраняем текст в состояние
     await state.update_data(publish_text=message.text)
     await state.set_state(PublishStates.waiting_for_time)
     
@@ -91,7 +86,6 @@ async def get_publish_text(message: types.Message, state: FSMContext):
 
 @dp.message(PublishStates.waiting_for_time)
 async def get_publish_time(message: types.Message, state: FSMContext):
-    """Получаем время и публикуем пост"""
     try:
         delay_minutes = int(message.text.strip())
         if delay_minutes <= 0:
@@ -100,7 +94,6 @@ async def get_publish_time(message: types.Message, state: FSMContext):
         await message.answer("❌ Пожалуйста, отправьте *положительное целое число* (количество минут).")
         return
     
-    # Получаем текст публикации из состояния
     data = await state.get_data()
     publish_text = data.get("publish_text")
     
@@ -109,15 +102,13 @@ async def get_publish_time(message: types.Message, state: FSMContext):
         await state.clear()
         return
     
-    # Публикуем пост в канал
     try:
         sent_message = await bot.send_message(
             chat_id=CHANNEL_ID,
             text=publish_text,
-            parse_mode="HTML"  # Поддерживает базовое форматирование
+            parse_mode="HTML"
         )
         
-        # Сохраняем данные для автозамены
         user_id = message.from_user.id
         if user_id not in user_data:
             user_data[user_id] = {}
@@ -129,7 +120,6 @@ async def get_publish_time(message: types.Message, state: FSMContext):
             "template": user_data.get(user_id, {}).get("template", "⚠️ Этот пост был автоматически заменён по шаблону.")
         }
         
-        # Уведомляем пользователя
         await message.answer(
             f"✅ *Публикация успешно выложена!*\n\n"
             f"🔹 Текст опубликован в канале.\n"
@@ -139,7 +129,6 @@ async def get_publish_time(message: types.Message, state: FSMContext):
             reply_markup=get_main_keyboard()
         )
         
-        # Запускаем задачу на замену
         asyncio.create_task(schedule_post_replacement(user_id, delay_minutes))
         
     except Exception as e:
@@ -155,7 +144,6 @@ async def get_publish_time(message: types.Message, state: FSMContext):
 
 @dp.callback_query(F.data == "change_template")
 async def change_template_start(callback: types.CallbackQuery, state: FSMContext):
-    """Начинаем изменение шаблона"""
     await callback.message.delete()
     await callback.answer()
     
@@ -173,7 +161,6 @@ async def change_template_start(callback: types.CallbackQuery, state: FSMContext
 
 @dp.message(TemplateStates.waiting_for_new_template)
 async def save_new_template(message: types.Message, state: FSMContext):
-    """Сохраняем новый шаблон"""
     if not message.text:
         await message.answer("❌ Пожалуйста, отправьте текст шаблона.")
         return
@@ -196,11 +183,9 @@ async def save_new_template(message: types.Message, state: FSMContext):
 
 # ========== ФОНОВАЯ ЗАДАЧА ЗАМЕНЫ ==========
 async def schedule_post_replacement(user_id: int, delay_minutes: int):
-    """Отложенная замена поста на шаблон"""
-    await asyncio.sleep(delay_minutes * 60)  # Переводим минуты в секунды
+    await asyncio.sleep(delay_minutes * 60)
     
     try:
-        # Проверяем, есть ли данные о посте
         if user_id not in user_data:
             return
         
@@ -208,10 +193,8 @@ async def schedule_post_replacement(user_id: int, delay_minutes: int):
         if not post_data:
             return
         
-        # Получаем шаблон
         template = user_data[user_id].get("template", "⚠️ Этот пост был автоматически заменён по шаблону.")
         
-        # Редактируем сообщение в канале
         await bot.edit_message_text(
             chat_id=post_data["chat_id"],
             message_id=post_data["message_id"],
@@ -220,8 +203,6 @@ async def schedule_post_replacement(user_id: int, delay_minutes: int):
         )
         
         logging.info(f"Пост {post_data['message_id']} заменён на шаблон для пользователя {user_id}")
-        
-        # Очищаем данные, чтобы не заменить повторно
         del user_data[user_id]["last_post"]
         
     except Exception as e:
