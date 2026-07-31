@@ -16,7 +16,6 @@ app = Flask(__name__)
 # Хранилище данных
 user_data = {}
 user_states = {}
-scheduled_replacements = []
 
 # ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
 def send_message(chat_id, text, reply_markup=None, parse_mode="Markdown"):
@@ -78,6 +77,10 @@ def handle_start(chat_id):
 
 def handle_publish_callback(chat_id):
     """Начало публикации"""
+    # Инициализируем список публикаций для пользователя
+    if chat_id not in user_data:
+        user_data[chat_id] = {"publications": [], "template": "⚠️ Этот пост был автоматически заменён по шаблону."}
+    
     user_states[chat_id] = "waiting_for_text"
     send_message(
         chat_id,
@@ -87,7 +90,10 @@ def handle_publish_callback(chat_id):
 
 def handle_change_template_callback(chat_id):
     """Начало изменения шаблона"""
-    current_template = user_data.get(chat_id, {}).get("template", "Не установлен")
+    if chat_id not in user_data:
+        user_data[chat_id] = {"publications": [], "template": "⚠️ Этот пост был автоматически заменён по шаблону."}
+    
+    current_template = user_data[chat_id].get("template", "Не установлен")
     
     user_states[chat_id] = "waiting_for_template"
     send_message(
@@ -104,10 +110,13 @@ def handle_text_message(chat_id, text):
     state = user_states.get(chat_id)
     
     if state == "waiting_for_text":
-        user_data[chat_id] = user_data.get(chat_id, {})
-        user_data[chat_id]["publish_text"] = text
+        # Инициализируем пользователя если нужно
+        if chat_id not in user_data:
+            user_data[chat_id] = {"publications": [], "template": "⚠️ Этот пост был автоматически заменён по шаблону."}
         
+        user_data[chat_id]["publish_text"] = text
         user_states[chat_id] = "waiting_for_time"
+        
         send_message(
             chat_id,
             "⏱ *Укажите время в минутах*, через которое публикация заменится на шаблон.\n\n"
@@ -143,29 +152,36 @@ def handle_text_message(chat_id, text):
             if response.get("ok"):
                 message_id = response["result"]["message_id"]
                 
-                # Сохраняем данные для замены
-                if chat_id not in user_data:
-                    user_data[chat_id] = {}
-                
-                user_data[chat_id]["last_post"] = {
+                # Создаём запись о публикации
+                publication = {
                     "message_id": message_id,
                     "replace_at": datetime.now() + timedelta(minutes=delay_minutes),
-                    "template": user_data.get(chat_id, {}).get("template", "⚠️ Этот пост был автоматически заменён по шаблону.")
+                    "template": user_data[chat_id].get("template", "⚠️ Этот пост был автоматически заменён по шаблону."),
+                    "chat_id": CHANNEL_ID
                 }
                 
-                # Планируем замену
-                schedule_replacement(chat_id, delay_minutes)
+                # Добавляем в список публикаций
+                if "publications" not in user_data[chat_id]:
+                    user_data[chat_id]["publications"] = []
+                
+                user_data[chat_id]["publications"].append(publication)
+                
+                # Планируем замену для этой конкретной публикации
+                schedule_replacement(chat_id, publication)
                 
                 send_message(
                     chat_id,
                     f"✅ *Публикация успешно выложена!*\n\n"
                     f"🔹 Текст опубликован в канале.\n"
                     f"🔹 Замена произойдет через *{delay_minutes} минут*.\n\n"
-                    f"⏳ Таймер запущен!",
+                    f"⏳ Таймер запущен!\n"
+                    f"📊 Всего активных публикаций: *{len(user_data[chat_id]['publications'])}*",
                     reply_markup=get_main_keyboard()
                 )
                 
                 user_states.pop(chat_id, None)
+                # Удаляем временный текст
+                user_data[chat_id].pop("publish_text", None)
             else:
                 send_message(
                     chat_id,
@@ -182,7 +198,7 @@ def handle_text_message(chat_id, text):
     
     elif state == "waiting_for_template":
         if chat_id not in user_data:
-            user_data[chat_id] = {}
+            user_data[chat_id] = {"publications": [], "template": "⚠️ Этот пост был автоматически заменён по шаблону."}
         
         user_data[chat_id]["template"] = text
         
@@ -196,29 +212,53 @@ def handle_text_message(chat_id, text):
         )
         user_states.pop(chat_id, None)
 
-def schedule_replacement(chat_id, delay_minutes):
-    """Планирование замены в отдельном потоке"""
+def schedule_replacement(chat_id, publication):
+    """Планирование замены конкретной публикации в отдельном потоке"""
     def replace_post():
-        time.sleep(delay_minutes * 60)
+        # Ждём указанное время
+        time.sleep((publication["replace_at"] - datetime.now()).total_seconds())
         
         try:
+            # Проверяем, существует ли ещё эта публикация в списке
             if chat_id not in user_data:
                 return
             
-            post_data = user_data[chat_id].get("last_post")
-            if not post_data:
-                return
+            publications = user_data[chat_id].get("publications", [])
             
+            # Ищем эту публикацию по message_id
+            found = False
+            for pub in publications:
+                if pub["message_id"] == publication["message_id"]:
+                    found = True
+                    break
+            
+            if not found:
+                return  # Публикация уже была заменена или удалена
+            
+            # Получаем актуальный шаблон (может быть изменён пользователем)
             template = user_data[chat_id].get("template", "⚠️ Этот пост был автоматически заменён по шаблону.")
             
             # Редактируем сообщение
-            edit_message(CHANNEL_ID, post_data["message_id"], template)
+            edit_message(CHANNEL_ID, publication["message_id"], template)
             
-            # Удаляем данные о посте
-            del user_data[chat_id]["last_post"]
+            # Удаляем эту публикацию из списка
+            user_data[chat_id]["publications"] = [
+                pub for pub in publications 
+                if pub["message_id"] != publication["message_id"]
+            ]
+            
+            print(f"✅ Пост {publication['message_id']} заменён на шаблон для пользователя {chat_id}")
             
         except Exception as e:
-            print(f"Ошибка замены поста: {e}")
+            print(f"❌ Ошибка замены поста {publication['message_id']}: {e}")
+            
+            # В случае ошибки всё равно удаляем публикацию из списка, чтобы избежать повторных попыток
+            if chat_id in user_data:
+                publications = user_data[chat_id].get("publications", [])
+                user_data[chat_id]["publications"] = [
+                    pub for pub in publications 
+                    if pub["message_id"] != publication["message_id"]
+                ]
     
     thread = threading.Thread(target=replace_post)
     thread.daemon = True
@@ -269,7 +309,7 @@ def webhook():
         
         return jsonify({"status": "ok"})
     except Exception as e:
-        print(f"Ошибка: {e}")
+        print(f"❌ Ошибка: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 # ========== ЗАПУСК ==========
@@ -277,7 +317,9 @@ if __name__ == "__main__":
     # Устанавливаем вебхук
     webhook_url = os.getenv("RENDER_EXTERNAL_URL", "http://localhost:5000")
     set_webhook_url = f"{BASE_URL}/setWebhook?url={webhook_url}"
-    requests.get(set_webhook_url)
+    response = requests.get(set_webhook_url)
+    print(f"✅ Вебхук установлен: {webhook_url}")
+    print(f"📊 Ответ: {response.json()}")
     
     print("🚀 Бот запущен!")
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
