@@ -12,7 +12,12 @@ app = Flask(__name__)
 
 # ========== НАСТРОЙКИ ==========
 BOT_TOKEN = "8977186531:AAFwl7w9GWT7zDPBWHmTF4KQzD6npHQ8i5U"
-CHANNEL_ID = "@S1n2a3p4S5e6l7l8_bot"
+
+# ВАЖНО: Используйте ID группы/канала, куда добавлены оба бота
+# Получить ID можно через @getidsbot или написав боту в группе и посмотрев логи
+CHANNEL_ID = "@SnapSell350"  # ❗ ЗАМЕНИТЕ НА РЕАЛЬНЫЙ ID ГРУППЫ/КАНАЛА
+# ИЛИ используйте свой личный ID для теста:
+# CHANNEL_ID = 123456789  # ваш Telegram ID
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
