@@ -187,10 +187,7 @@ def handle_start(chat_id, user_id):
     user_sessions[user_id] = {"step": "menu"}
     
     if user_id not in user_templates:
-        user_templates[user_id] = "🔒Задание закончилось!
-Дождитесь нового поста, чтобы откликнуться 
-
-Не успеваете брать задания? Включите уведомления и получайте их первыми!"
+        user_templates[user_id] = "🔒Задание закончилось! Дождитесь нового поста, чтобы откликнуться Не успеваете брать задания? Включите уведомления и получайте их первыми!"
     
     if user_id not in auto_posts:
         auto_posts[user_id] = []
@@ -393,10 +390,7 @@ def handle_text_message(chat_id, user_id, text):
                     reply_markup=get_main_menu()
                 )
                 
-                template = user_templates.get(user_id, "🔒Задание закончилось!
-Дождитесь нового поста, чтобы откликнуться 
-
-Не успеваете брать задания? Включите уведомления и получайте их первыми!")
+                template = user_templates.get(user_id, "🔒Задание закончилось! Дождитесь нового поста, чтобы откликнуться Не успеваете брать задания? Включите уведомления и получайте их первыми!")
                 
                 def replace_post():
                     time.sleep(minutes * 60)
