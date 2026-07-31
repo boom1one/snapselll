@@ -240,7 +240,7 @@ def handle_callback_query(callback_data, chat_id, user_id, message_id):
     
     if callback_data == "change_template":
         user_sessions[user_id]["step"] = "waiting_new_template"
-        current_template = user_templates.get(user_id, "⚠️ ВНИМАНИЕ! Этот пост был автоматически заменён по истечении времени.")
+        current_template = user_templates.get(user_id, "🔒Задание закончилось! Дождитесь нового поста, чтобы откликнуться Не успеваете брать задания? Включите уведомления и получайте их первыми!")
         send_message(chat_id, 
             f"✏️ <b>Напишите новый шаблон для автозамены</b>\n\n"
             f"📋 <b>Текущий шаблон:</b>\n"
