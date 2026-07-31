@@ -7,8 +7,8 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 # ========== КОНФИГУРАЦИЯ ==========
-TOKEN = "8857819530:AAF_XClRgpje6cZ08HDZMEVGyXqMnVUyqNE"
-CHANNEL_ID = "@testiktiks"
+TOKEN = "8977186531:AAFwl7w9GWT7zDPBWHmTF4KQzD6npHQ8i5U"
+CHANNEL_ID = "@SnapSell350"
 BASE_URL = f"https://api.telegram.org/bot{TOKEN}"
 
 app = Flask(__name__)
