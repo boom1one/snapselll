@@ -4,13 +4,13 @@ import logging
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.storage.memory import MemoryStorage
 
 # ========== КОНФИГУРАЦИЯ ==========
-TOKEN = os.getenv("8977186531:AAFwl7w9GWT7zDPBWHmTF4KQzD6npHQ8i5U")  # Токен бота
+TOKEN = os.getenv("8977186531:AAFwl7w9GWT7zDPBWHmTF4KQzD6npHQ8i5U")  # Токен бота (установите в Render)
 CHANNEL_ID = "@SnapSell350"     # ID канала
 
 # ========== ИНИЦИАЛИЗАЦИЯ ==========
