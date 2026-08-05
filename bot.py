@@ -766,16 +766,27 @@ def restart_all_daily_tasks():
                 logger.info(f"✅ Восстановлена ежедневная задача для {chat_id} в {pub['time']}")
 
 # ========== ВЕБХУК ==========
-@app.route("/", methods=["GET", "POST"])
+@app.route("/", methods=["GET", "HEAD", "POST"])
 def webhook():
     """Обработка входящих обновлений"""
+    # Обработка HEAD запросов (проверка здоровья от Render)
+    if request.method == "HEAD":
+        return "", 200
+    
+    # Обработка GET запросов
     if request.method == "GET":
         return "Bot is running!"
     
+    # Обработка POST запросов (только для Telegram)
     try:
+        # Проверяем Content-Type
+        if request.headers.get('Content-Type') != 'application/json':
+            logger.warning(f"Неверный Content-Type: {request.headers.get('Content-Type')}")
+            return jsonify({"status": "ok"}), 200
+        
         update = request.get_json()
         if not update:
-            return jsonify({"status": "ok"})
+            return jsonify({"status": "ok"}), 200
         
         if "message" in update:
             message = update["message"]
