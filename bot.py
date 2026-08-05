@@ -6,6 +6,14 @@ import json
 from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 import re
+import logging
+
+# ========== НАСТРОЙКА ЛОГИРОВАНИЯ ==========
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # ========== КОНФИГУРАЦИЯ ==========
 TOKEN = "8857819530:AAF_XClRgpje6cZ08HDZMEVGyXqMnVUyqNE"
@@ -30,8 +38,12 @@ def send_message(chat_id, text, reply_markup=None, parse_mode="Markdown"):
     if reply_markup:
         payload["reply_markup"] = json.dumps(reply_markup)
     
-    response = requests.post(url, json=payload)
-    return response.json()
+    try:
+        response = requests.post(url, json=payload, timeout=30)
+        return response.json()
+    except Exception as e:
+        logger.error(f"Ошибка отправки сообщения: {e}")
+        return {"ok": False, "error": str(e)}
 
 def edit_message(chat_id, message_id, text, parse_mode="HTML"):
     """Редактирование сообщения"""
@@ -42,8 +54,12 @@ def edit_message(chat_id, message_id, text, parse_mode="HTML"):
         "text": text,
         "parse_mode": parse_mode
     }
-    response = requests.post(url, json=payload)
-    return response.json()
+    try:
+        response = requests.post(url, json=payload, timeout=30)
+        return response.json()
+    except Exception as e:
+        logger.error(f"Ошибка редактирования сообщения: {e}")
+        return {"ok": False, "error": str(e)}
 
 def delete_message(chat_id, message_id):
     """Удаление сообщения"""
@@ -52,8 +68,32 @@ def delete_message(chat_id, message_id):
         "chat_id": chat_id,
         "message_id": message_id
     }
-    response = requests.post(url, json=payload)
-    return response.json()
+    try:
+        response = requests.post(url, json=payload, timeout=30)
+        return response.json()
+    except Exception as e:
+        logger.error(f"Ошибка удаления сообщения: {e}")
+        return {"ok": False, "error": str(e)}
+
+def send_to_channel(text, parse_mode="HTML"):
+    """Отправка сообщения в канал с проверкой"""
+    url = f"{BASE_URL}/sendMessage"
+    payload = {
+        "chat_id": CHANNEL_ID,
+        "text": text,
+        "parse_mode": parse_mode
+    }
+    try:
+        response = requests.post(url, json=payload, timeout=30)
+        result = response.json()
+        if result.get("ok"):
+            logger.info(f"✅ Сообщение отправлено в канал: {text[:50]}...")
+        else:
+            logger.error(f"❌ Ошибка отправки в канал: {result}")
+        return result
+    except Exception as e:
+        logger.error(f"❌ Ошибка отправки в канал: {e}")
+        return {"ok": False, "error": str(e)}
 
 def get_main_keyboard():
     """Главное меню"""
@@ -90,13 +130,13 @@ def get_confirm_keyboard():
 # ========== ОБРАБОТЧИКИ КОМАНД ==========
 def handle_start(chat_id):
     """Команда /start"""
-    # Инициализируем пользователя
     if chat_id not in user_data:
         user_data[chat_id] = {
             "publications": [],
             "daily_publications": [],
             "template": "⚠️ Этот пост был автоматически заменён по шаблону."
         }
+        logger.info(f"👤 Новый пользователь: {chat_id}")
     
     text = (
         "👋 *Добро пожаловать в бота управления публикациями!*\n\n"
@@ -183,7 +223,6 @@ def handle_my_posts_callback(chat_id):
     
     text = "📊 *Ваши публикации*\n\n"
     
-    # Обычные публикации
     if publications:
         text += "🔹 *Обычные публикации (с автозаменой):*\n"
         for i, pub in enumerate(publications, 1):
@@ -203,11 +242,17 @@ def handle_my_posts_callback(chat_id):
             text += f"  *{i}.* ID: `{pub['message_id']}` — ⏱ *{time_str}*\n"
         text += "\n"
     
-    # Ежедневные публикации
     if daily_publications:
         text += "🔹 *Ежедневные публикации:*\n"
         for i, pub in enumerate(daily_publications, 1):
+            last_pub = pub.get('last_published', 'Никогда')
+            if last_pub != 'Никогда':
+                try:
+                    last_pub = datetime.fromisoformat(last_pub).strftime('%d.%m.%Y %H:%M')
+                except:
+                    pass
             text += f"  *{i}.* ⏰ *{pub['time']}* — `{pub['text'][:30]}{'...' if len(pub['text']) > 30 else ''}`\n"
+            text += f"      📅 Последняя публикация: {last_pub}\n"
     
     send_message(chat_id, text, reply_markup=get_main_keyboard())
 
@@ -243,12 +288,17 @@ def handle_list_daily_callback(chat_id):
     
     text = "📋 *Список ежедневных публикаций*\n\n"
     for i, pub in enumerate(daily_pubs, 1):
+        last_pub = pub.get('last_published', 'Никогда')
+        if last_pub != 'Никогда':
+            try:
+                last_pub = datetime.fromisoformat(last_pub).strftime('%d.%m.%Y %H:%M')
+            except:
+                pass
         text += f"*{i}.* ⏰ *{pub['time']}*\n"
         text += f"   📝 `{pub['text'][:50]}{'...' if len(pub['text']) > 50 else ''}`\n"
-        text += f"   🆔 ID: `{pub['id']}`\n\n"
+        text += f"   📅 Последняя: {last_pub}\n\n"
     
-    text += "\n💡 *Чтобы удалить публикацию, отправьте её номер* (например: `1`)\n"
-    text += "Или нажмите кнопку ниже для возврата."
+    text += "\n💡 *Чтобы удалить публикацию, отправьте её номер* (например: `1`)"
     
     send_message(
         chat_id,
@@ -268,19 +318,14 @@ def handle_text_message(chat_id, text):
     
     if state == "waiting_for_text":
         handle_publish_text(chat_id, text)
-    
     elif state == "waiting_for_time":
         handle_publish_time(chat_id, text)
-    
     elif state == "waiting_for_template":
         handle_template_save(chat_id, text)
-    
     elif state == "waiting_for_daily_text":
         handle_daily_text(chat_id, text)
-    
     elif state == "waiting_for_daily_time":
         handle_daily_time(chat_id, text)
-    
     elif state == "waiting_for_daily_delete":
         handle_daily_delete(chat_id, text)
 
@@ -319,18 +364,12 @@ def handle_publish_time(chat_id, text):
         user_states.pop(chat_id, None)
         return
     
-    # Публикуем в канал
     try:
-        url = f"{BASE_URL}/sendMessage"
-        payload = {
-            "chat_id": CHANNEL_ID,
-            "text": publish_text,
-            "parse_mode": "HTML"
-        }
-        response = requests.post(url, json=payload).json()
+        # Отправляем в канал
+        result = send_to_channel(publish_text)
         
-        if response.get("ok"):
-            message_id = response["result"]["message_id"]
+        if result.get("ok"):
+            message_id = result["result"]["message_id"]
             
             current_template = user_data[chat_id].get("template", "⚠️ Этот пост был автоматически заменён по шаблону.")
             
@@ -364,13 +403,16 @@ def handle_publish_time(chat_id, text):
             user_states.pop(chat_id, None)
             user_data[chat_id].pop("publish_text", None)
         else:
+            error_msg = result.get('description', 'Неизвестная ошибка')
             send_message(
                 chat_id,
-                "❌ *Ошибка при публикации!*\n"
-                "Проверьте, что бот является администратором канала.",
+                f"❌ *Ошибка при публикации!*\n\n"
+                f"Причина: {error_msg}\n\n"
+                f"Проверьте, что бот является администратором канала.",
                 reply_markup=get_main_keyboard()
             )
     except Exception as e:
+        logger.error(f"Ошибка публикации: {e}")
         send_message(
             chat_id,
             f"❌ Ошибка: {str(e)}",
@@ -428,7 +470,6 @@ def handle_daily_text(chat_id, text):
 
 def handle_daily_time(chat_id, text):
     """Обработка времени для ежедневной публикации"""
-    # Проверяем формат времени HH:MM
     if not re.match(r'^\d{2}:\d{2}$', text):
         send_message(
             chat_id,
@@ -456,13 +497,14 @@ def handle_daily_time(chat_id, text):
         user_states.pop(chat_id, None)
         return
     
-    # Создаём ежедневную публикацию
+    # Создаём ежедневную публикацию с уникальным ID
     daily_pub = {
-        "id": len(user_data[chat_id].get("daily_publications", [])) + 1,
+        "id": int(time.time()),  # Уникальный ID на основе времени
         "text": daily_text,
         "time": text,
         "created_at": datetime.now().isoformat(),
-        "last_published": None
+        "last_published": None,
+        "active": True
     }
     
     if "daily_publications" not in user_data[chat_id]:
@@ -471,7 +513,7 @@ def handle_daily_time(chat_id, text):
     user_data[chat_id]["daily_publications"].append(daily_pub)
     
     # Запускаем задачу для этой публикации
-    schedule_daily_publication(chat_id, daily_pub)
+    start_daily_task(chat_id, daily_pub)
     
     send_message(
         chat_id,
@@ -479,12 +521,14 @@ def handle_daily_time(chat_id, text):
         f"📝 Текст:\n`{daily_text}`\n\n"
         f"⏰ Время: *{text}*\n"
         f"📊 Всего ежедневных публикаций: *{len(user_data[chat_id]['daily_publications'])}*\n\n"
-        "Публикация будет выходить каждый день в указанное время!",
+        "Публикация будет выходить каждый день в указанное время! 🎉",
         reply_markup=get_main_keyboard()
     )
     
     user_states.pop(chat_id, None)
     user_data[chat_id].pop("daily_text", None)
+    
+    logger.info(f"📅 Создана ежедневная публикация для {chat_id} в {text}")
 
 def handle_daily_delete(chat_id, text):
     """Удаление ежедневной публикации по номеру"""
@@ -495,13 +539,12 @@ def handle_daily_delete(chat_id, text):
         if index < 0 or index >= len(daily_pubs):
             send_message(
                 chat_id,
-                "❌ *Неверный номер!*\n\n"
+                f"❌ *Неверный номер!*\n\n"
                 f"Пожалуйста, отправьте номер от 1 до {len(daily_pubs)}.",
                 reply_markup=get_main_keyboard()
             )
             return
         
-        # Сохраняем ID публикации для удаления
         user_data[chat_id]["delete_index"] = index
         pub_to_delete = daily_pubs[index]
         
@@ -533,6 +576,7 @@ def confirm_delete_daily(chat_id):
     daily_pubs = user_data[chat_id].get("daily_publications", [])
     if delete_index < len(daily_pubs):
         deleted_pub = daily_pubs.pop(delete_index)
+        deleted_pub['active'] = False  # Отмечаем как неактивную
         
         send_message(
             chat_id,
@@ -543,6 +587,8 @@ def confirm_delete_daily(chat_id):
             f"📊 Осталось публикаций: *{len(daily_pubs)}*",
             reply_markup=get_main_keyboard()
         )
+        
+        logger.info(f"🗑️ Удалена ежедневная публикация {deleted_pub['id']} для {chat_id}")
     else:
         send_message(
             chat_id,
@@ -558,7 +604,6 @@ def cancel_delete_daily(chat_id):
     user_data[chat_id].pop("delete_index", None)
     user_states.pop(chat_id, None)
     
-    # Показываем список публикаций
     daily_pubs = user_data[chat_id].get("daily_publications", [])
     
     if not daily_pubs:
@@ -587,6 +632,7 @@ def cancel_delete_daily(chat_id):
     )
     user_states[chat_id] = "waiting_for_daily_delete"
 
+# ========== ФОНОВЫЕ ЗАДАЧИ ==========
 def schedule_replacement(chat_id, publication):
     """Планирование замены конкретной публикации"""
     def replace_post():
@@ -610,17 +656,20 @@ def schedule_replacement(chat_id, publication):
                 return
             
             template = found_pub["template"]
-            edit_message(CHANNEL_ID, publication["message_id"], template)
+            result = edit_message(CHANNEL_ID, publication["message_id"], template)
+            
+            if result.get("ok"):
+                logger.info(f"✅ Пост {publication['message_id']} заменён на шаблон")
+            else:
+                logger.error(f"❌ Ошибка замены поста: {result}")
             
             user_data[chat_id]["publications"] = [
                 pub for pub in publications 
                 if pub["message_id"] != publication["message_id"]
             ]
             
-            print(f"✅ Пост {publication['message_id']} заменён на шаблон")
-            
         except Exception as e:
-            print(f"❌ Ошибка замены поста {publication['message_id']}: {e}")
+            logger.error(f"❌ Ошибка замены поста {publication['message_id']}: {e}")
             if chat_id in user_data:
                 publications = user_data[chat_id].get("publications", [])
                 user_data[chat_id]["publications"] = [
@@ -628,64 +677,95 @@ def schedule_replacement(chat_id, publication):
                     if pub["message_id"] != publication["message_id"]
                 ]
     
-    thread = threading.Thread(target=replace_post)
-    thread.daemon = True
+    thread = threading.Thread(target=replace_post, daemon=True)
     thread.start()
+    logger.info(f"⏱️ Запланирована замена поста {publication['message_id']} через {publication['replace_at']}")
 
-def schedule_daily_publication(chat_id, daily_pub):
-    """Планирование ежедневной публикации"""
+def start_daily_task(chat_id, daily_pub):
+    """Запуск задачи для ежедневной публикации"""
     def daily_job():
+        pub_id = daily_pub['id']
+        pub_time = daily_pub['time']
+        
+        logger.info(f"🔄 Запущена ежедневная задача для {pub_id} в {pub_time}")
+        
         while True:
             try:
+                # Проверяем, существует ли ещё эта публикация
+                if chat_id not in user_data:
+                    logger.info(f"🔄 Пользователь {chat_id} удалён, завершаем задачу {pub_id}")
+                    break
+                
+                # Проверяем, активна ли публикация
+                pub_exists = False
+                for pub in user_data[chat_id].get("daily_publications", []):
+                    if pub['id'] == pub_id and pub.get('active', True):
+                        pub_exists = True
+                        break
+                
+                if not pub_exists:
+                    logger.info(f"🔄 Ежедневная публикация {pub_id} удалена, завершаем задачу")
+                    break
+                
                 # Вычисляем следующее время публикации
                 now = datetime.now()
-                hours, minutes = map(int, daily_pub['time'].split(':'))
+                hours, minutes = map(int, pub_time.split(':'))
                 
-                # Следующее время публикации сегодня
                 next_publish = now.replace(hour=hours, minute=minutes, second=0, microsecond=0)
                 
                 # Если время уже прошло сегодня, публикуем завтра
                 if next_publish <= now:
                     next_publish += timedelta(days=1)
                 
-                # Ждём до следующей публикации
                 wait_seconds = (next_publish - now).total_seconds()
+                
+                logger.info(f"⏳ Следующая публикация {pub_id} через {wait_seconds/60:.1f} минут (в {pub_time})")
+                
                 time.sleep(wait_seconds)
                 
-                # Публикуем в канал
-                url = f"{BASE_URL}/sendMessage"
-                payload = {
-                    "chat_id": CHANNEL_ID,
-                    "text": daily_pub['text'],
-                    "parse_mode": "HTML"
-                }
-                response = requests.post(url, json=payload)
-                
-                if response.status_code == 200:
-                    daily_pub['last_published'] = datetime.now().isoformat()
-                    print(f"✅ Ежедневная публикация {daily_pub['id']} отправлена в {daily_pub['time']}")
-                else:
-                    print(f"❌ Ошибка отправки ежедневной публикации: {response.text}")
-                
-                # Проверяем, не была ли публикация удалена
-                if chat_id in user_data:
-                    exists = False
-                    for pub in user_data[chat_id].get("daily_publications", []):
-                        if pub['id'] == daily_pub['id']:
-                            exists = True
-                            break
-                    
-                    if not exists:
-                        print(f"🔄 Ежедневная публикация {daily_pub['id']} удалена, завершаем цикл")
+                # Проверяем ещё раз перед публикацией
+                pub_still_exists = False
+                for pub in user_data[chat_id].get("daily_publications", []):
+                    if pub['id'] == pub_id and pub.get('active', True):
+                        pub_still_exists = True
                         break
                 
+                if not pub_still_exists:
+                    logger.info(f"🔄 Публикация {pub_id} удалена перед отправкой, завершаем")
+                    break
+                
+                # Отправляем в канал
+                result = send_to_channel(daily_pub['text'])
+                
+                if result.get("ok"):
+                    # Обновляем время последней публикации
+                    for pub in user_data[chat_id].get("daily_publications", []):
+                        if pub['id'] == pub_id:
+                            pub['last_published'] = datetime.now().isoformat()
+                            break
+                    
+                    logger.info(f"✅ Ежедневная публикация {pub_id} отправлена в {pub_time}")
+                else:
+                    logger.error(f"❌ Ошибка отправки ежедневной публикации {pub_id}: {result}")
+                
             except Exception as e:
-                print(f"❌ Ошибка в ежедневной публикации {daily_pub['id']}: {e}")
+                logger.error(f"❌ Ошибка в ежедневной задаче {pub_id}: {e}")
                 time.sleep(60)  # Ждём минуту перед повторной попыткой
     
-    thread = threading.Thread(target=daily_job)
-    thread.daemon = True
+    thread = threading.Thread(target=daily_job, daemon=True)
     thread.start()
+    logger.info(f"📅 Запущена ежедневная задача для {chat_id} в {daily_pub['time']}")
+
+def restart_all_daily_tasks():
+    """Перезапуск всех ежедневных задач при старте бота"""
+    logger.info("🔄 Перезапуск всех ежедневных задач...")
+    
+    for chat_id, data in user_data.items():
+        daily_pubs = data.get("daily_publications", [])
+        for pub in daily_pubs:
+            if pub.get('active', True):
+                start_daily_task(chat_id, pub)
+                logger.info(f"✅ Восстановлена ежедневная задача для {chat_id} в {pub['time']}")
 
 # ========== ВЕБХУК ==========
 @app.route("/", methods=["GET", "POST"])
@@ -746,16 +826,21 @@ def webhook():
         
         return jsonify({"status": "ok"})
     except Exception as e:
-        print(f"❌ Ошибка: {e}")
+        logger.error(f"❌ Ошибка в webhook: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 # ========== ЗАПУСК ==========
 if __name__ == "__main__":
+    # Восстанавливаем задачи при старте
+    restart_all_daily_tasks()
+    
+    # Устанавливаем вебхук
     webhook_url = os.getenv("RENDER_EXTERNAL_URL", "http://localhost:5000")
     set_webhook_url = f"{BASE_URL}/setWebhook?url={webhook_url}"
     response = requests.get(set_webhook_url)
-    print(f"✅ Вебхук установлен: {webhook_url}")
-    print(f"📊 Ответ: {response.json()}")
     
-    print("🚀 Бот запущен!")
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+    if response.status_code == 200:
+        logger.info(f"✅ Вебхук установлен: {webhook_url}")
+        logger.info(f"📊 Ответ: {response.json()}")
+    else:
+        logger.error(f"❌ Ошибка установки веб
