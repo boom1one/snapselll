@@ -499,7 +499,7 @@ def handle_daily_time(chat_id, text):
     
     # Создаём ежедневную публикацию с уникальным ID
     daily_pub = {
-        "id": int(time.time()),  # Уникальный ID на основе времени
+        "id": int(time.time()),
         "text": daily_text,
         "time": text,
         "created_at": datetime.now().isoformat(),
@@ -576,7 +576,7 @@ def confirm_delete_daily(chat_id):
     daily_pubs = user_data[chat_id].get("daily_publications", [])
     if delete_index < len(daily_pubs):
         deleted_pub = daily_pubs.pop(delete_index)
-        deleted_pub['active'] = False  # Отмечаем как неактивную
+        deleted_pub['active'] = False
         
         send_message(
             chat_id,
@@ -679,7 +679,7 @@ def schedule_replacement(chat_id, publication):
     
     thread = threading.Thread(target=replace_post, daemon=True)
     thread.start()
-    logger.info(f"⏱️ Запланирована замена поста {publication['message_id']} через {publication['replace_at']}")
+    logger.info(f"⏱️ Запланирована замена поста {publication['message_id']}")
 
 def start_daily_task(chat_id, daily_pub):
     """Запуск задачи для ежедневной публикации"""
@@ -713,7 +713,6 @@ def start_daily_task(chat_id, daily_pub):
                 
                 next_publish = now.replace(hour=hours, minute=minutes, second=0, microsecond=0)
                 
-                # Если время уже прошло сегодня, публикуем завтра
                 if next_publish <= now:
                     next_publish += timedelta(days=1)
                 
@@ -738,7 +737,6 @@ def start_daily_task(chat_id, daily_pub):
                 result = send_to_channel(daily_pub['text'])
                 
                 if result.get("ok"):
-                    # Обновляем время последней публикации
                     for pub in user_data[chat_id].get("daily_publications", []):
                         if pub['id'] == pub_id:
                             pub['last_published'] = datetime.now().isoformat()
@@ -750,7 +748,7 @@ def start_daily_task(chat_id, daily_pub):
                 
             except Exception as e:
                 logger.error(f"❌ Ошибка в ежедневной задаче {pub_id}: {e}")
-                time.sleep(60)  # Ждём минуту перед повторной попыткой
+                time.sleep(60)
     
     thread = threading.Thread(target=daily_job, daemon=True)
     thread.start()
@@ -779,7 +777,6 @@ def webhook():
         if not update:
             return jsonify({"status": "ok"})
         
-        # Обработка сообщений
         if "message" in update:
             message = update["message"]
             chat_id = message["chat"]["id"]
@@ -792,17 +789,14 @@ def webhook():
                 else:
                     handle_text_message(chat_id, text)
         
-        # Обработка callback'ов
         elif "callback_query" in update:
             callback = update["callback_query"]
             chat_id = callback["message"]["chat"]["id"]
             data = callback["data"]
             
-            # Ответ на callback
             url = f"{BASE_URL}/answerCallbackQuery"
             requests.post(url, json={"callback_query_id": callback["id"]})
             
-            # Удаляем сообщение с кнопками
             delete_message(chat_id, callback["message"]["message_id"])
             
             if data == "publish":
@@ -843,4 +837,8 @@ if __name__ == "__main__":
         logger.info(f"✅ Вебхук установлен: {webhook_url}")
         logger.info(f"📊 Ответ: {response.json()}")
     else:
-        logger.error(f"❌ Ошибка установки веб
+        logger.error(f"❌ Ошибка установки вебхука: {response.status_code}")
+        logger.error(f"Текст ошибки: {response.text}")
+    
+    logger.info("🚀 Бот запущен!")
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
