@@ -99,7 +99,8 @@ def get_main_keyboard():
     return {
         "inline_keyboard": [
             [{"text": "📤 Выложить публикацию", "callback_data": "publish"}],
-            [{"text": "✏️ Изменить шаблон автозамены", "callback_data": "change_template"}]
+            [{"text": "✏️ Изменить шаблон автозамены", "callback_data": "change_template"}],
+            [{"text": "📋 Мои публикации", "callback_data": "my_posts"}]
         ]
     }
 
@@ -117,7 +118,8 @@ def handle_start(chat_id):
         "👋 *Добро пожаловать в бота управления публикациями!*\n\n"
         "Здесь вы можете:\n"
         "• *Выложить публикацию* в канал с автоматической заменой\n"
-        "• *Изменить шаблон* для автозамены\n\n"
+        "• *Изменить шаблон* для автозамены\n"
+        "• *Просмотреть свои публикации*\n\n"
         "Выберите действие ниже 👇"
     )
     send_message(chat_id, text, reply_markup=get_main_keyboard())
@@ -157,6 +159,49 @@ def handle_change_template_callback(chat_id):
         f"Вы можете использовать *HTML-теги* для форматирования:\n"
         f"`<b>жирный</b>`, `<i>курсив</i>`, `<a href='url'>ссылка</a>`"
     )
+
+def handle_my_posts_callback(chat_id):
+    """Показывает все активные публикации пользователя"""
+    if chat_id not in user_data:
+        user_data[chat_id] = {
+            "publications": [],
+            "template": "⚠️ Этот пост был автоматически заменён по шаблону."
+        }
+    
+    publications = user_data[chat_id].get("publications", [])
+    
+    if not publications:
+        send_message(
+            chat_id,
+            "📭 *У вас нет активных публикаций*\n\n"
+            "Создайте новую публикацию!",
+            reply_markup=get_main_keyboard()
+        )
+        return
+    
+    text = "📊 *Ваши активные публикации*\n\n"
+    
+    for i, pub in enumerate(publications, 1):
+        time_left = (pub["replace_at"] - datetime.now()).total_seconds()
+        if time_left > 0:
+            minutes_left = int(time_left / 60)
+            hours_left = minutes_left // 60
+            mins_left = minutes_left % 60
+            
+            if hours_left > 0:
+                time_str = f"{hours_left}ч {mins_left}м"
+            else:
+                time_str = f"{mins_left}м"
+        else:
+            time_str = "⏳ Скоро"
+        
+        text += f"*{i}.* ID: `{pub['message_id']}`\n"
+        text += f"   ⏱ Замена через: *{time_str}*\n"
+        text += f"   📝 Шаблон: `{pub['template'][:40]}{'...' if len(pub['template']) > 40 else ''}`\n\n"
+    
+    text += f"\n📊 Всего активных публикаций: *{len(publications)}*"
+    
+    send_message(chat_id, text, reply_markup=get_main_keyboard())
 
 def handle_text_message(chat_id, text):
     """Обработка текстовых сообщений"""
@@ -385,6 +430,8 @@ def webhook():
                 handle_publish_callback(chat_id)
             elif data == "change_template":
                 handle_change_template_callback(chat_id)
+            elif data == "my_posts":
+                handle_my_posts_callback(chat_id)
         
         return jsonify({"status": "ok"})
     except Exception as e:
