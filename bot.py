@@ -35,6 +35,12 @@ app = Flask(__name__)
 user_data = {}
 user_states = {}
 
+# ========== ШАБЛОН ДЛЯ ЗАМЕНЫ ==========
+REPLACEMENT_TEMPLATE = """🔒Задание закончилось!
+Дождитесь нового поста, чтобы откликнуться 
+
+Не успеваете брать задания? Включите уведомления и получайте их первыми!"""
+
 # ========== РАБОТА С ДАННЫМИ ==========
 def save_data():
     """Сохранение данных в файл"""
@@ -269,7 +275,7 @@ def handle_start(chat_id):
         user_data[chat_id] = {
             "publications": [],
             "auto_publications": [],
-            "template": "⚠️ Этот пост был автоматически заменён по шаблону."
+            "template": REPLACEMENT_TEMPLATE
         }
         save_data()
         logger.info(f"👤 Новый администратор: {chat_id}")
@@ -294,7 +300,7 @@ def handle_publish_callback(chat_id):
         user_data[chat_id] = {
             "publications": [],
             "auto_publications": [],
-            "template": "⚠️ Этот пост был автоматически заменён по шаблону."
+            "template": REPLACEMENT_TEMPLATE
         }
         save_data()
     
@@ -316,11 +322,11 @@ def handle_change_template_callback(chat_id):
         user_data[chat_id] = {
             "publications": [],
             "auto_publications": [],
-            "template": "⚠️ Этот пост был автоматически заменён по шаблону."
+            "template": REPLACEMENT_TEMPLATE
         }
         save_data()
     
-    current_template = user_data[chat_id].get("template", "Не установлен")
+    current_template = user_data[chat_id].get("template", REPLACEMENT_TEMPLATE)
     
     user_states[chat_id] = "waiting_for_template"
     send_message(
@@ -344,7 +350,7 @@ def handle_auto_publish_callback(chat_id):
         user_data[chat_id] = {
             "publications": [],
             "auto_publications": [],
-            "template": "⚠️ Этот пост был автоматически заменён по шаблону."
+            "template": REPLACEMENT_TEMPLATE
         }
         save_data()
     
@@ -363,7 +369,7 @@ def handle_back_to_menu(chat_id):
         user_data[chat_id] = {
             "publications": [],
             "auto_publications": [],
-            "template": "⚠️ Этот пост был автоматически заменён по шаблону."
+            "template": REPLACEMENT_TEMPLATE
         }
         save_data()
     
@@ -402,7 +408,7 @@ def handle_publish_text(chat_id, text):
         user_data[chat_id] = {
             "publications": [],
             "auto_publications": [],
-            "template": "⚠️ Этот пост был автоматически заменён по шаблону."
+            "template": REPLACEMENT_TEMPLATE
         }
         save_data()
     
@@ -438,7 +444,7 @@ def handle_publish_time(chat_id, text):
         
         if result.get("ok"):
             message_id = result["result"]["message_id"]
-            current_template = user_data[chat_id].get("template", "⚠️ Этот пост был автоматически заменён по шаблону.")
+            current_template = user_data[chat_id].get("template", REPLACEMENT_TEMPLATE)
             
             publication = {
                 "message_id": message_id,
@@ -488,7 +494,7 @@ def handle_template_save(chat_id, text):
         user_data[chat_id] = {
             "publications": [],
             "auto_publications": [],
-            "template": "⚠️ Этот пост был автоматически заменён по шаблону."
+            "template": REPLACEMENT_TEMPLATE
         }
         save_data()
     
@@ -510,7 +516,7 @@ def handle_auto_text(chat_id, text):
         user_data[chat_id] = {
             "publications": [],
             "auto_publications": [],
-            "template": "⚠️ Этот пост был автоматически заменён по шаблону."
+            "template": REPLACEMENT_TEMPLATE
         }
         save_data()
     
@@ -645,7 +651,7 @@ def send_auto_publication(chat_id, auto_pub):
             save_data()
             
             if auto_pub["published_count"] <= auto_pub["total_count"]:
-                current_template = user_data[chat_id].get("template", "⚠️ Этот пост был автоматически заменён по шаблону.")
+                current_template = user_data[chat_id].get("template", REPLACEMENT_TEMPLATE)
                 
                 publication = {
                     "message_id": message_id,
