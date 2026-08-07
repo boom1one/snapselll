@@ -859,4 +859,9 @@ if __name__ == "__main__":
     ping_bot()
     
     logger.info(f"🚀 Бот запущен! Разрешено пользователей: {len(ALLOWED_USERS)}")
-    logger.info(f
+    logger.info(f"👥 ID администраторов: {ALLOWED_USERS}")
+    logger.info(f"📢 Канал: {CHANNEL_ID}")
+    
+    # Запускаем Flask приложение
+    port = int(os.getenv("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
