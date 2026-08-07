@@ -26,12 +26,6 @@ ALLOWED_USERS = [
     1524345644,  # @piggass - ГЛАВНЫЙ АДМИНИСТРАТОР
 ]
 
-# ========== ГЛАВНЫЕ АДМИНИСТРАТОРЫ (могут добавлять других) ==========
-MASTER_ADMINS = [
-    "piggass",      # Ваш юзернейм
-    "Gdjfcj28573"   # Другой мастер-админ
-]
-
 # Файл для хранения данных
 DATA_FILE = "bot_data.pkl"
 
@@ -80,19 +74,25 @@ def restore_timers():
     """Восстановление таймеров после перезагрузки"""
     restored_count = 0
     for chat_id, data in user_data.items():
+        # Восстанавливаем автопубликации
+        for pub in data.get("auto_publications", []):
+            if pub.get("active", False):
+                schedule_auto_publication(chat_id, pub)
+                restored_count += 1
+                logger.info(f"🔄 Восстановлена автопубликация {pub['id']}")
+        
+        # Восстанавливаем обычные публикации
         for pub in data.get("publications", []):
-            # Проверяем, не истекло ли время
             if datetime.now() < pub["replace_at"]:
                 schedule_replacement(chat_id, pub)
                 restored_count += 1
                 logger.info(f"🔄 Восстановлен таймер для поста {pub['message_id']}")
             else:
-                # Если время уже прошло, заменяем сразу
                 logger.info(f"⏰ Пост {pub['message_id']} просрочен, заменяем")
                 replace_post_immediately(chat_id, pub)
     
     if restored_count > 0:
-        logger.info(f"🔄 Восстановлено {restored_count} таймеров")
+        logger.info(f"🔄 Восстановлено {restored_count} задач")
 
 def replace_post_immediately(chat_id, publication):
     """Немедленная замена поста"""
@@ -105,7 +105,6 @@ def replace_post_immediately(chat_id, publication):
         else:
             logger.error(f"❌ Ошибка замены: {result}")
         
-        # Удаляем из списка
         if chat_id in user_data:
             user_data[chat_id]["publications"] = [
                 pub for pub in user_data[chat_id]["publications"]
@@ -119,85 +118,6 @@ def replace_post_immediately(chat_id, publication):
 def is_allowed_user(chat_id):
     """Проверка, имеет ли пользователь доступ"""
     return chat_id in ALLOWED_USERS
-
-def is_master_admin(chat_id):
-    """Проверка, является ли пользователь главным администратором"""
-    try:
-        # Получаем username пользователя
-        url = f"{BASE_URL}/getChat"
-        response = requests.get(url, params={"chat_id": chat_id})
-        if response.status_code == 200:
-            data = response.json()
-            if data.get("ok"):
-                username = data["result"].get("username", "").lower()
-                # Проверяем, есть ли username в списке мастер-админов
-                return username in [admin.lower() for admin in MASTER_ADMINS]
-    except Exception as e:
-        logger.error(f"Ошибка проверки мастер-админа: {e}")
-    return False
-
-def get_username_by_id(chat_id):
-    """Получить username пользователя по ID"""
-    try:
-        url = f"{BASE_URL}/getChat"
-        response = requests.get(url, params={"chat_id": chat_id})
-        if response.status_code == 200:
-            data = response.json()
-            if data.get("ok"):
-                return data["result"].get("username")
-    except Exception as e:
-        logger.error(f"Ошибка получения username: {e}")
-    return None
-
-def get_user_id_from_username(username):
-    """Получить ID пользователя по username"""
-    if username.startswith("@"):
-        username = username[1:]
-    
-    # Пробуем получить информацию о пользователе
-    url = f"{BASE_URL}/getChat"
-    try:
-        response = requests.get(url, params={"chat_id": f"@{username}"})
-        if response.status_code == 200:
-            data = response.json()
-            if data.get("ok"):
-                return data["result"]["id"]
-        else:
-            logger.error(f"Ошибка получения ID для @{username}: {response.status_code} - {response.text}")
-    except Exception as e:
-        logger.error(f"Ошибка получения ID для @{username}: {e}")
-    return None
-
-def add_admin_by_username(username, added_by):
-    """Добавить администратора по username"""
-    if username.startswith("@"):
-        username = username[1:]
-    
-    # Проверяем, существует ли пользователь
-    user_id = get_user_id_from_username(username)
-    if not user_id:
-        return False, "❌ Пользователь не найден. Проверьте правильность username.\n\n💡 Убедитесь, что:\n• Пользователь существует в Telegram\n• Вы ввели username без @\n• У пользователя есть username"
-    
-    # Проверяем, не добавлен ли уже
-    if user_id in ALLOWED_USERS:
-        return False, f"❌ Пользователь @{username} уже является администратором."
-    
-    # Добавляем
-    ALLOWED_USERS.append(user_id)
-    save_data()
-    
-    # Уведомляем нового администратора
-    try:
-        send_message(
-            user_id,
-            f"🎉 *Вас добавили в администраторы бота!*\n\n"
-            f"Теперь вы можете использовать бота для управления публикациями в канале {CHANNEL_ID}.\n"
-            f"Для начала работы отправьте команду /start"
-        )
-    except:
-        pass
-    
-    return True, f"✅ Администратор @{username} успешно добавлен!"
 
 # ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
 def send_message(chat_id, text, reply_markup=None, parse_mode="Markdown"):
@@ -270,15 +190,13 @@ def send_to_channel(text, parse_mode="HTML"):
 
 def get_main_keyboard():
     """Главное меню"""
-    keyboard = [
-        [{"text": "📤 Выложить публикацию", "callback_data": "publish"}],
-        [{"text": "✏️ Изменить шаблон автозамены", "callback_data": "change_template"}]
-    ]
-    
-    # Кнопка для добавления администратора (доступна всем, но проверка по правам)
-    keyboard.append([{"text": "👑 Добавить администратора", "callback_data": "add_admin"}])
-    
-    return {"inline_keyboard": keyboard}
+    return {
+        "inline_keyboard": [
+            [{"text": "📤 Выложить публикацию", "callback_data": "publish"}],
+            [{"text": "✏️ Изменить шаблон автозамены", "callback_data": "change_template"}],
+            [{"text": "🔄 Автопубликации", "callback_data": "auto_publish"}]
+        ]
+    }
 
 def get_back_keyboard():
     """Клавиатура с кнопкой Назад"""
@@ -291,7 +209,6 @@ def get_back_keyboard():
 # ========== ОБРАБОТЧИКИ КОМАНД ==========
 def handle_start(chat_id):
     """Команда /start с проверкой доступа"""
-    # Проверяем, есть ли у пользователя доступ
     if not is_allowed_user(chat_id):
         send_message(
             chat_id,
@@ -301,36 +218,27 @@ def handle_start(chat_id):
         logger.warning(f"⚠️ Неавторизованный доступ: {chat_id}")
         return
     
-    # Для авторизованных пользователей
     if chat_id not in user_data:
         user_data[chat_id] = {
             "publications": [],
+            "auto_publications": [],
             "template": "⚠️ Этот пост был автоматически заменён по шаблону."
         }
         save_data()
         logger.info(f"👤 Новый администратор: {chat_id}")
-    
-    # Проверяем, является ли пользователь мастер-админом
-    is_master = is_master_admin(chat_id)
     
     text = (
         "👋 *Добро пожаловать в бота управления публикациями!*\n\n"
         "Здесь вы можете:\n"
         "• *Выложить публикацию* в канал с автоматической заменой\n"
         "• *Изменить шаблон* для автозамены\n"
+        "• *Настроить автопубликации* - периодическая публикация постов\n\n"
+        "Выберите действие ниже 👇"
     )
-    
-    if is_master:
-        text += "• *Добавить нового администратора* (только для главных админов)\n\n"
-    else:
-        text += "\n"
-    
-    text += "Выберите действие ниже 👇"
     send_message(chat_id, text, reply_markup=get_main_keyboard())
 
 def handle_publish_callback(chat_id):
     """Начало публикации"""
-    # Проверка доступа
     if not is_allowed_user(chat_id):
         send_message(chat_id, "🚫 У вас нет доступа к этому боту.")
         return
@@ -338,6 +246,7 @@ def handle_publish_callback(chat_id):
     if chat_id not in user_data:
         user_data[chat_id] = {
             "publications": [],
+            "auto_publications": [],
             "template": "⚠️ Этот пост был автоматически заменён по шаблону."
         }
         save_data()
@@ -352,7 +261,6 @@ def handle_publish_callback(chat_id):
 
 def handle_change_template_callback(chat_id):
     """Начало изменения шаблона"""
-    # Проверка доступа
     if not is_allowed_user(chat_id):
         send_message(chat_id, "🚫 У вас нет доступа к этому боту.")
         return
@@ -360,6 +268,7 @@ def handle_change_template_callback(chat_id):
     if chat_id not in user_data:
         user_data[chat_id] = {
             "publications": [],
+            "auto_publications": [],
             "template": "⚠️ Этот пост был автоматически заменён по шаблону."
         }
         save_data()
@@ -378,26 +287,26 @@ def handle_change_template_callback(chat_id):
         reply_markup=get_back_keyboard()
     )
 
-def handle_add_admin_callback(chat_id):
-    """Обработка нажатия кнопки Добавить администратора"""
-    # Проверяем, является ли пользователь мастер-админом
-    if not is_master_admin(chat_id):
-        send_message(
-            chat_id,
-            "🚫 *У вас нет доступа к панели*\n\n"
-            "Только главные администраторы могут добавлять новых.",
-            reply_markup=get_main_keyboard()
-        )
-        logger.warning(f"⚠️ Попытка добавить админа без прав: {chat_id}")
+def handle_auto_publish_callback(chat_id):
+    """Начало настройки автопубликации"""
+    if not is_allowed_user(chat_id):
+        send_message(chat_id, "🚫 У вас нет доступа к этому боту.")
         return
     
-    user_states[chat_id] = "waiting_for_admin_username"
+    if chat_id not in user_data:
+        user_data[chat_id] = {
+            "publications": [],
+            "auto_publications": [],
+            "template": "⚠️ Этот пост был автоматически заменён по шаблону."
+        }
+        save_data()
+    
+    user_states[chat_id] = "waiting_for_auto_text"
     send_message(
         chat_id,
-        "👑 *Добавление нового администратора*\n\n"
-        "Отправьте *username* пользователя, которого хотите добавить.\n\n"
-        "Пример: `@username` или просто `username`\n\n"
-        "❗️ Пользователь должен существовать в Telegram.",
+        "🔄 *Настройка автопубликации*\n\n"
+        "📝 *Отправьте текст поста*, который будет публиковаться автоматически.\n\n"
+        "Это может быть любой текст, ссылки, или форматирование.",
         reply_markup=get_back_keyboard()
     )
 
@@ -406,6 +315,7 @@ def handle_back_to_menu(chat_id):
     if chat_id not in user_data:
         user_data[chat_id] = {
             "publications": [],
+            "auto_publications": [],
             "template": "⚠️ Этот пост был автоматически заменён по шаблону."
         }
         save_data()
@@ -419,7 +329,6 @@ def handle_back_to_menu(chat_id):
 
 def handle_text_message(chat_id, text):
     """Обработка текстовых сообщений"""
-    # Проверка доступа для всех текстовых сообщений
     if not is_allowed_user(chat_id):
         send_message(chat_id, "🚫 У вас нет доступа к этому боту.")
         return
@@ -432,14 +341,20 @@ def handle_text_message(chat_id, text):
         handle_publish_time(chat_id, text)
     elif state == "waiting_for_template":
         handle_template_save(chat_id, text)
-    elif state == "waiting_for_admin_username":
-        handle_add_admin_username(chat_id, text)
+    elif state == "waiting_for_auto_text":
+        handle_auto_text(chat_id, text)
+    elif state == "waiting_for_auto_interval":
+        handle_auto_interval(chat_id, text)
+    elif state == "waiting_for_auto_count":
+        handle_auto_count(chat_id, text)
 
+# ========== ОБЫЧНЫЕ ПУБЛИКАЦИИ ==========
 def handle_publish_text(chat_id, text):
     """Обработка текста публикации"""
     if chat_id not in user_data:
         user_data[chat_id] = {
             "publications": [],
+            "auto_publications": [],
             "template": "⚠️ Этот пост был автоматически заменён по шаблону."
         }
         save_data()
@@ -472,12 +387,10 @@ def handle_publish_time(chat_id, text):
         return
     
     try:
-        # Отправляем в канал
         result = send_to_channel(publish_text)
         
         if result.get("ok"):
             message_id = result["result"]["message_id"]
-            
             current_template = user_data[chat_id].get("template", "⚠️ Этот пост был автоматически заменён по шаблону.")
             
             publication = {
@@ -492,7 +405,7 @@ def handle_publish_time(chat_id, text):
                 user_data[chat_id]["publications"] = []
             
             user_data[chat_id]["publications"].append(publication)
-            save_data()  # Сохраняем после добавления
+            save_data()
             
             schedule_replacement(chat_id, publication)
             
@@ -503,8 +416,7 @@ def handle_publish_time(chat_id, text):
                 f"🔹 Замена произойдет через *{delay_minutes} минут*.\n"
                 f"🔹 Шаблон зафиксирован:\n"
                 f"`{current_template[:50]}{'...' if len(current_template) > 50 else ''}`\n\n"
-                f"⏳ Таймер запущен!\n"
-                f"📊 Всего активных публикаций: *{len(user_data[chat_id]['publications'])}*",
+                f"⏳ Таймер запущен!",
                 reply_markup=get_main_keyboard()
             )
             
@@ -521,89 +433,173 @@ def handle_publish_time(chat_id, text):
             )
     except Exception as e:
         logger.error(f"Ошибка публикации: {e}")
-        send_message(
-            chat_id,
-            f"❌ Ошибка: {str(e)}",
-            reply_markup=get_main_keyboard()
-        )
+        send_message(chat_id, f"❌ Ошибка: {str(e)}", reply_markup=get_main_keyboard())
 
 def handle_template_save(chat_id, text):
     """Сохранение нового шаблона"""
     if chat_id not in user_data:
         user_data[chat_id] = {
             "publications": [],
+            "auto_publications": [],
             "template": "⚠️ Этот пост был автоматически заменён по шаблону."
         }
         save_data()
     
     user_data[chat_id]["template"] = text
-    save_data()  # Сохраняем шаблон
-    
-    active_publications = user_data[chat_id].get("publications", [])
-    active_count = len(active_publications)
-    
-    response_text = (
-        "✅ *Шаблон успешно обновлен!*\n\n"
-        f"📌 Новый шаблон (для будущих публикаций):\n"
-        f"`{text}`\n\n"
-        f"⚠️ *Важно:*\n"
-        f"• Уже опубликованные посты (*{active_count} шт.*) заменятся на СВОИ шаблоны.\n"
-        f"• Новый шаблон будет применяться только к *НОВЫМ* публикациям."
-    )
+    save_data()
     
     send_message(
         chat_id,
-        response_text,
+        f"✅ *Шаблон успешно обновлен!*\n\n"
+        f"📌 Новый шаблон:\n`{text}`",
         reply_markup=get_main_keyboard()
     )
     user_states.pop(chat_id, None)
 
-def handle_add_admin_username(chat_id, text):
-    """Обработка username для добавления администратора"""
-    username = text.strip()
+# ========== АВТОПУБЛИКАЦИИ ==========
+def handle_auto_text(chat_id, text):
+    """Обработка текста автопубликации"""
+    if chat_id not in user_data:
+        user_data[chat_id] = {
+            "publications": [],
+            "auto_publications": [],
+            "template": "⚠️ Этот пост был автоматически заменён по шаблону."
+        }
+        save_data()
     
-    # Убираем @ если есть
-    if username.startswith("@"):
-        username = username[1:]
+    user_data[chat_id]["auto_text"] = text
+    user_states[chat_id] = "waiting_for_auto_interval"
     
-    # Проверяем, что это не пустая строка
-    if not username:
-        send_message(chat_id, "❌ Пожалуйста, отправьте корректный username.", reply_markup=get_back_keyboard())
+    send_message(
+        chat_id,
+        "⏱ *Укажите интервал в минутах* между публикациями.\n\n"
+        "Пример: `60` — публикация каждый час.\n"
+        "Отправьте *только число*.",
+        reply_markup=get_back_keyboard()
+    )
+
+def handle_auto_interval(chat_id, text):
+    """Обработка интервала автопубликации"""
+    try:
+        interval_minutes = int(text.strip())
+        if interval_minutes <= 0:
+            raise ValueError("Интервал должен быть положительным")
+    except ValueError:
+        send_message(chat_id, "❌ Пожалуйста, отправьте *положительное целое число* (количество минут).")
         return
     
-    # Добавляем администратора
-    success, message = add_admin_by_username(username, chat_id)
+    user_data[chat_id]["auto_interval"] = interval_minutes
+    user_states[chat_id] = "waiting_for_auto_count"
     
     send_message(
         chat_id,
-        message,
+        f"🔢 *Укажите количество публикаций*\n\n"
+        f"Сколько раз должен опубликоваться пост?\n"
+        f"Интервал: *{interval_minutes} минут*\n\n"
+        f"Пример: `5` — опубликуется 5 раз.",
+        reply_markup=get_back_keyboard()
+    )
+
+def handle_auto_count(chat_id, text):
+    """Обработка количества автопубликаций"""
+    try:
+        count = int(text.strip())
+        if count <= 0:
+            raise ValueError("Количество должно быть положительным")
+    except ValueError:
+        send_message(chat_id, "❌ Пожалуйста, отправьте *положительное целое число*.")
+        return
+    
+    auto_text = user_data[chat_id].get("auto_text")
+    interval = user_data[chat_id].get("auto_interval")
+    
+    if not auto_text or not interval:
+        send_message(chat_id, "❌ Ошибка: данные не найдены. Начните заново /start")
+        user_states.pop(chat_id, None)
+        return
+    
+    # Создаем задачу автопубликации
+    auto_pub = {
+        "id": int(time.time()),
+        "text": auto_text,
+        "interval_minutes": interval,
+        "total_count": count,
+        "published_count": 0,
+        "active": True,
+        "created_at": datetime.now().isoformat()
+    }
+    
+    if "auto_publications" not in user_data[chat_id]:
+        user_data[chat_id]["auto_publications"] = []
+    
+    user_data[chat_id]["auto_publications"].append(auto_pub)
+    save_data()
+    
+    # Запускаем автопубликацию
+    schedule_auto_publication(chat_id, auto_pub)
+    
+    send_message(
+        chat_id,
+        f"✅ *Автопубликация настроена!*\n\n"
+        f"📝 Текст: `{auto_text[:50]}{'...' if len(auto_text) > 50 else ''}`\n"
+        f"⏱ Интервал: *{interval} минут*\n"
+        f"🔢 Количество: *{count} раз*\n\n"
+        f"🔄 Первая публикация будет отправлена сейчас!",
         reply_markup=get_main_keyboard()
     )
-    user_states.pop(chat_id, None)
-
-# ========== ФУНКЦИЯ ПИНГА ==========
-def ping_bot():
-    """Функция для пинга бота (не отправляет сообщения в канал)"""
-    def ping_loop():
-        while True:
-            try:
-                # Просто делаем запрос к API бота, чтобы он оставался активным
-                url = f"{BASE_URL}/getMe"
-                response = requests.get(url, timeout=10)
-                if response.status_code == 200:
-                    logger.info(f"🔄 Пинг бота выполнен в {datetime.now()}")
-                else:
-                    logger.warning(f"⚠️ Пинг бота вернул код: {response.status_code}")
-            except Exception as e:
-                logger.error(f"❌ Ошибка при пинге бота: {e}")
-            
-            # Ждем 5 минут
-            time.sleep(300)  # 300 секунд = 5 минут
     
-    # Запускаем пинг в отдельном потоке
-    ping_thread = threading.Thread(target=ping_loop, daemon=True)
-    ping_thread.start()
-    logger.info("🔄 Запущен автоматический пинг бота (каждые 5 минут)")
+    user_states.pop(chat_id, None)
+    user_data[chat_id].pop("auto_text", None)
+    user_data[chat_id].pop("auto_interval", None)
+    
+    # Отправляем первую публикацию сразу
+    send_auto_publication(chat_id, auto_pub)
+
+def send_auto_publication(chat_id, auto_pub):
+    """Отправка одной автопубликации"""
+    try:
+        result = send_to_channel(auto_pub["text"])
+        
+        if result.get("ok"):
+            auto_pub["published_count"] += 1
+            logger.info(f"✅ Автопубликация {auto_pub['id']} отправлена ({auto_pub['published_count']}/{auto_pub['total_count']})")
+            save_data()
+            
+            # Проверяем, достигнуто ли нужное количество
+            if auto_pub["published_count"] >= auto_pub["total_count"]:
+                auto_pub["active"] = False
+                save_data()
+                logger.info(f"✅ Автопубликация {auto_pub['id']} завершена")
+                
+                # Уведомляем пользователя
+                send_message(
+                    chat_id,
+                    f"✅ *Автопубликация завершена!*\n\n"
+                    f"Все *{auto_pub['total_count']}* публикаций отправлены.\n"
+                    f"📝 Текст: `{auto_pub['text'][:50]}{'...' if len(auto_pub['text']) > 50 else ''}`"
+                )
+        else:
+            logger.error(f"❌ Ошибка автопубликации: {result}")
+    except Exception as e:
+        logger.error(f"❌ Ошибка при автопубликации: {e}")
+
+def schedule_auto_publication(chat_id, auto_pub):
+    """Планирование следующей автопубликации"""
+    def auto_publish_loop():
+        while auto_pub.get("active", False) and auto_pub["published_count"] < auto_pub["total_count"]:
+            # Ждем интервал
+            time.sleep(auto_pub["interval_minutes"] * 60)
+            
+            # Проверяем, активна ли еще задача
+            if not auto_pub.get("active", False):
+                break
+            
+            # Отправляем следующую публикацию
+            send_auto_publication(chat_id, auto_pub)
+    
+    thread = threading.Thread(target=auto_publish_loop, daemon=False)
+    thread.start()
+    logger.info(f"🔄 Запущена автопубликация {auto_pub['id']}")
 
 # ========== ФОНОВЫЕ ЗАДАЧИ ==========
 def schedule_replacement(chat_id, publication):
@@ -611,11 +607,9 @@ def schedule_replacement(chat_id, publication):
     def replace_post():
         wait_seconds = (publication["replace_at"] - datetime.now()).total_seconds()
         if wait_seconds > 0:
-            # Разбиваем ожидание на интервалы по 60 секунд
             while wait_seconds > 0:
                 time.sleep(min(60, wait_seconds))
                 wait_seconds -= 60
-                # Проверяем, не отменили ли публикацию
                 if chat_id in user_data:
                     found = any(
                         pub["message_id"] == publication["message_id"]
@@ -647,44 +641,48 @@ def schedule_replacement(chat_id, publication):
             else:
                 logger.error(f"❌ Ошибка замены поста: {result}")
             
-            # Удаляем из списка
             user_data[chat_id]["publications"] = [
                 pub for pub in publications 
                 if pub["message_id"] != publication["message_id"]
             ]
-            save_data()  # Сохраняем изменения
+            save_data()
             
         except Exception as e:
             logger.error(f"❌ Ошибка замены поста {publication['message_id']}: {e}")
-            if chat_id in user_data:
-                publications = user_data[chat_id].get("publications", [])
-                user_data[chat_id]["publications"] = [
-                    pub for pub in publications 
-                    if pub["message_id"] != publication["message_id"]
-                ]
-                save_data()
     
     thread = threading.Thread(target=replace_post, daemon=False)
     thread.start()
     logger.info(f"⏱️ Запланирована замена поста {publication['message_id']}")
 
+# ========== ФУНКЦИЯ ПИНГА ==========
+def ping_bot():
+    """Функция для пинга бота (не отправляет сообщения)"""
+    def ping_loop():
+        while True:
+            try:
+                url = f"{BASE_URL}/getMe"
+                response = requests.get(url, timeout=10)
+                if response.status_code == 200:
+                    logger.info(f"🔄 Пинг бота выполнен в {datetime.now()}")
+            except Exception as e:
+                logger.error(f"❌ Ошибка при пинге бота: {e}")
+            time.sleep(300)
+    
+    ping_thread = threading.Thread(target=ping_loop, daemon=True)
+    ping_thread.start()
+    logger.info("🔄 Запущен автоматический пинг бота (каждые 5 минут)")
+
 # ========== ВЕБХУК ==========
 @app.route("/", methods=["GET", "HEAD", "POST"])
 def webhook():
-    """Обработка входящих обновлений"""
-    # Обработка HEAD запросов (проверка здоровья от Render)
     if request.method == "HEAD":
         return "", 200
     
-    # Обработка GET запросов
     if request.method == "GET":
         return "Bot is running!"
     
-    # Обработка POST запросов (только для Telegram)
     try:
-        # Проверяем Content-Type
         if request.headers.get('Content-Type') != 'application/json':
-            logger.warning(f"Неверный Content-Type: {request.headers.get('Content-Type')}")
             return jsonify({"status": "ok"}), 200
         
         update = request.get_json()
@@ -697,7 +695,6 @@ def webhook():
             
             if "text" in message:
                 text = message["text"]
-                
                 if text.startswith("/start"):
                     handle_start(chat_id)
                 else:
@@ -717,8 +714,8 @@ def webhook():
                 handle_publish_callback(chat_id)
             elif data == "change_template":
                 handle_change_template_callback(chat_id)
-            elif data == "add_admin":
-                handle_add_admin_callback(chat_id)
+            elif data == "auto_publish":
+                handle_auto_publish_callback(chat_id)
             elif data == "back_to_menu":
                 handle_back_to_menu(chat_id)
         
@@ -729,25 +726,19 @@ def webhook():
 
 # ========== ЗАПУСК ==========
 if __name__ == "__main__":
-    # Загружаем сохраненные данные
     load_data()
     
-    # Устанавливаем вебхук
     webhook_url = os.getenv("RENDER_EXTERNAL_URL", "http://localhost:5000")
     set_webhook_url = f"{BASE_URL}/setWebhook?url={webhook_url}"
     response = requests.get(set_webhook_url)
     
     if response.status_code == 200:
         logger.info(f"✅ Вебхук установлен: {webhook_url}")
-        logger.info(f"📊 Ответ: {response.json()}")
     else:
         logger.error(f"❌ Ошибка установки вебхука: {response.status_code}")
-        logger.error(f"Текст ошибки: {response.text}")
     
-    # Запускаем пинг бота
     ping_bot()
     
     logger.info(f"🚀 Бот запущен! Разрешено пользователей: {len(ALLOWED_USERS)}")
     logger.info(f"👥 ID администраторов: {ALLOWED_USERS}")
-    logger.info(f"👑 Главные администраторы: {MASTER_ADMINS}")
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
