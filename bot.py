@@ -23,14 +23,13 @@ BASE_URL = f"https://api.telegram.org/bot{TOKEN}"
 # ========== АДМИНИСТРАТОРЫ ==========
 # Список ID пользователей, которым разрешен доступ
 ALLOWED_USERS = [
-    1524345644,  # Замените на реальный ID
-    987654321,  # Добавьте других администраторов
+    1524345644,  # @piggass - ГЛАВНЫЙ АДМИНИСТРАТОР
 ]
 
 # ========== ГЛАВНЫЕ АДМИНИСТРАТОРЫ (могут добавлять других) ==========
 MASTER_ADMINS = [
-    "piggass",      # Юзернейм без @
-    "Gdjfcj28573"   # Юзернейм без @
+    "piggass",      # Ваш юзернейм
+    "Gdjfcj28573"   # Другой мастер-админ
 ]
 
 # Файл для хранения данных
@@ -155,6 +154,7 @@ def get_user_id_from_username(username):
     if username.startswith("@"):
         username = username[1:]
     
+    # Пробуем получить информацию о пользователе
     url = f"{BASE_URL}/getChat"
     try:
         response = requests.get(url, params={"chat_id": f"@{username}"})
@@ -162,6 +162,8 @@ def get_user_id_from_username(username):
             data = response.json()
             if data.get("ok"):
                 return data["result"]["id"]
+        else:
+            logger.error(f"Ошибка получения ID для @{username}: {response.status_code} - {response.text}")
     except Exception as e:
         logger.error(f"Ошибка получения ID для @{username}: {e}")
     return None
@@ -174,7 +176,7 @@ def add_admin_by_username(username, added_by):
     # Проверяем, существует ли пользователь
     user_id = get_user_id_from_username(username)
     if not user_id:
-        return False, "❌ Пользователь не найден. Проверьте правильность username."
+        return False, "❌ Пользователь не найден. Проверьте правильность username.\n\n💡 Убедитесь, что:\n• Пользователь существует в Telegram\n• Вы ввели username без @\n• У пользователя есть username"
     
     # Проверяем, не добавлен ли уже
     if user_id in ALLOWED_USERS:
@@ -267,17 +269,24 @@ def send_to_channel(text, parse_mode="HTML"):
         return {"ok": False, "error": str(e)}
 
 def get_main_keyboard():
-    """Главное меню (с кнопкой Добавить администратора для мастер-админов)"""
+    """Главное меню"""
     keyboard = [
         [{"text": "📤 Выложить публикацию", "callback_data": "publish"}],
         [{"text": "✏️ Изменить шаблон автозамены", "callback_data": "change_template"}]
     ]
     
-    # Проверяем, является ли пользователь мастер-админом
-    # (это будет проверяться при нажатии кнопки, но для красоты показываем всем)
+    # Кнопка для добавления администратора (доступна всем, но проверка по правам)
     keyboard.append([{"text": "👑 Добавить администратора", "callback_data": "add_admin"}])
     
     return {"inline_keyboard": keyboard}
+
+def get_back_keyboard():
+    """Клавиатура с кнопкой Назад"""
+    return {
+        "inline_keyboard": [
+            [{"text": "🔙 Назад", "callback_data": "back_to_menu"}]
+        ]
+    }
 
 # ========== ОБРАБОТЧИКИ КОМАНД ==========
 def handle_start(chat_id):
@@ -301,14 +310,22 @@ def handle_start(chat_id):
         save_data()
         logger.info(f"👤 Новый администратор: {chat_id}")
     
+    # Проверяем, является ли пользователь мастер-админом
+    is_master = is_master_admin(chat_id)
+    
     text = (
         "👋 *Добро пожаловать в бота управления публикациями!*\n\n"
         "Здесь вы можете:\n"
         "• *Выложить публикацию* в канал с автоматической заменой\n"
         "• *Изменить шаблон* для автозамены\n"
-        "• *Добавить нового администратора* (только для главных админов)\n\n"
-        "Выберите действие ниже 👇"
     )
+    
+    if is_master:
+        text += "• *Добавить нового администратора* (только для главных админов)\n\n"
+    else:
+        text += "\n"
+    
+    text += "Выберите действие ниже 👇"
     send_message(chat_id, text, reply_markup=get_main_keyboard())
 
 def handle_publish_callback(chat_id):
@@ -329,7 +346,8 @@ def handle_publish_callback(chat_id):
     send_message(
         chat_id,
         "📝 *Отправьте текст публикации*, который вы хотите выложить в канал.\n\n"
-        "Это может быть любой текст, ссылки, или форматирование."
+        "Это может быть любой текст, ссылки, или форматирование.",
+        reply_markup=get_back_keyboard()
     )
 
 def handle_change_template_callback(chat_id):
@@ -356,7 +374,8 @@ def handle_change_template_callback(chat_id):
         f"✍️ *Отправьте новый текст шаблона*, на который будут заменяться *НОВЫЕ* публикации.\n\n"
         f"⚠️ *Важно:* Изменение шаблона не повлияет на уже опубликованные посты.\n\n"
         f"Вы можете использовать *HTML-теги* для форматирования:\n"
-        f"`<b>жирный</b>`, `<i>курсив</i>`, `<a href='url'>ссылка</a>`"
+        f"`<b>жирный</b>`, `<i>курсив</i>`, `<a href='url'>ссылка</a>`",
+        reply_markup=get_back_keyboard()
     )
 
 def handle_add_admin_callback(chat_id):
@@ -366,7 +385,8 @@ def handle_add_admin_callback(chat_id):
         send_message(
             chat_id,
             "🚫 *У вас нет доступа к панели*\n\n"
-            "Только главные администраторы могут добавлять новых."
+            "Только главные администраторы могут добавлять новых.",
+            reply_markup=get_main_keyboard()
         )
         logger.warning(f"⚠️ Попытка добавить админа без прав: {chat_id}")
         return
@@ -377,7 +397,24 @@ def handle_add_admin_callback(chat_id):
         "👑 *Добавление нового администратора*\n\n"
         "Отправьте *username* пользователя, которого хотите добавить.\n\n"
         "Пример: `@username` или просто `username`\n\n"
-        "❗️ Пользователь должен существовать в Telegram."
+        "❗️ Пользователь должен существовать в Telegram.",
+        reply_markup=get_back_keyboard()
+    )
+
+def handle_back_to_menu(chat_id):
+    """Возврат в главное меню"""
+    if chat_id not in user_data:
+        user_data[chat_id] = {
+            "publications": [],
+            "template": "⚠️ Этот пост был автоматически заменён по шаблону."
+        }
+        save_data()
+    
+    user_states.pop(chat_id, None)
+    send_message(
+        chat_id,
+        "🔙 *Возврат в главное меню*\n\nВыберите действие:",
+        reply_markup=get_main_keyboard()
     )
 
 def handle_text_message(chat_id, text):
@@ -414,7 +451,8 @@ def handle_publish_text(chat_id, text):
         chat_id,
         "⏱ *Укажите время в минутах*, через которое публикация заменится на шаблон.\n\n"
         "Пример: `120` — замена через 2 часа.\n"
-        "Отправьте *только число*."
+        "Отправьте *только число*.",
+        reply_markup=get_back_keyboard()
     )
 
 def handle_publish_time(chat_id, text):
@@ -530,7 +568,7 @@ def handle_add_admin_username(chat_id, text):
     
     # Проверяем, что это не пустая строка
     if not username:
-        send_message(chat_id, "❌ Пожалуйста, отправьте корректный username.")
+        send_message(chat_id, "❌ Пожалуйста, отправьте корректный username.", reply_markup=get_back_keyboard())
         return
     
     # Добавляем администратора
@@ -545,13 +583,17 @@ def handle_add_admin_username(chat_id, text):
 
 # ========== ФУНКЦИЯ ПИНГА ==========
 def ping_bot():
-    """Функция для пинга бота командой /start"""
+    """Функция для пинга бота (не отправляет сообщения в канал)"""
     def ping_loop():
         while True:
             try:
-                # Отправляем команду /start в канал
-                send_message(CHANNEL_ID, "/start")
-                logger.info(f"🔄 Пинг бота выполнен в {datetime.now()}")
+                # Просто делаем запрос к API бота, чтобы он оставался активным
+                url = f"{BASE_URL}/getMe"
+                response = requests.get(url, timeout=10)
+                if response.status_code == 200:
+                    logger.info(f"🔄 Пинг бота выполнен в {datetime.now()}")
+                else:
+                    logger.warning(f"⚠️ Пинг бота вернул код: {response.status_code}")
             except Exception as e:
                 logger.error(f"❌ Ошибка при пинге бота: {e}")
             
@@ -677,6 +719,8 @@ def webhook():
                 handle_change_template_callback(chat_id)
             elif data == "add_admin":
                 handle_add_admin_callback(chat_id)
+            elif data == "back_to_menu":
+                handle_back_to_menu(chat_id)
         
         return jsonify({"status": "ok"})
     except Exception as e:
