@@ -21,7 +21,6 @@ CHANNEL_ID = "@testiktiks"
 BASE_URL = f"https://api.telegram.org/bot{TOKEN}"
 
 # ========== АДМИНИСТРАТОРЫ ==========
-# Список ID пользователей, которым разрешен доступ
 ALLOWED_USERS = [
     1524345644,  # @piggass - ГЛАВНЫЙ АДМИНИСТРАТОР
 ]
@@ -63,7 +62,6 @@ def load_data():
             logger.info(f"📂 Данные загружены: {len(user_data)} пользователей")
             logger.info(f"👥 Разрешено пользователей: {len(ALLOWED_USERS)}")
             
-            # Восстанавливаем таймеры
             restore_timers()
             return True
     except Exception as e:
@@ -188,6 +186,44 @@ def send_to_channel(text, parse_mode="HTML"):
         logger.error(f"❌ Ошибка отправки в канал: {e}")
         return {"ok": False, "error": str(e)}
 
+def pin_message(chat_id, message_id):
+    """Закрепление сообщения"""
+    url = f"{BASE_URL}/pinChatMessage"
+    payload = {
+        "chat_id": chat_id,
+        "message_id": message_id
+    }
+    try:
+        response = requests.post(url, json=payload, timeout=30)
+        result = response.json()
+        if result.get("ok"):
+            logger.info(f"✅ Сообщение {message_id} закреплено")
+        else:
+            logger.error(f"❌ Ошибка закрепления: {result}")
+        return result
+    except Exception as e:
+        logger.error(f"❌ Ошибка закрепления: {e}")
+        return {"ok": False, "error": str(e)}
+
+def unpin_message(chat_id, message_id):
+    """Открепление сообщения"""
+    url = f"{BASE_URL}/unpinChatMessage"
+    payload = {
+        "chat_id": chat_id,
+        "message_id": message_id
+    }
+    try:
+        response = requests.post(url, json=payload, timeout=30)
+        result = response.json()
+        if result.get("ok"):
+            logger.info(f"✅ Сообщение {message_id} откреплено")
+        else:
+            logger.error(f"❌ Ошибка открепления: {result}")
+        return result
+    except Exception as e:
+        logger.error(f"❌ Ошибка открепления: {e}")
+        return {"ok": False, "error": str(e)}
+
 def get_main_keyboard():
     """Главное меню"""
     return {
@@ -202,6 +238,16 @@ def get_back_keyboard():
     """Клавиатура с кнопкой Назад"""
     return {
         "inline_keyboard": [
+            [{"text": "🔙 Назад", "callback_data": "back_to_menu"}]
+        ]
+    }
+
+def get_pin_keyboard():
+    """Клавиатура для выбора закрепления"""
+    return {
+        "inline_keyboard": [
+            [{"text": "✅ Да, закреплять", "callback_data": "pin_yes"}],
+            [{"text": "❌ Нет, не закреплять", "callback_data": "pin_no"}],
             [{"text": "🔙 Назад", "callback_data": "back_to_menu"}]
         ]
     }
@@ -510,13 +556,31 @@ def handle_auto_count(chat_id, text):
         send_message(chat_id, "❌ Пожалуйста, отправьте *положительное целое число*.")
         return
     
+    user_data[chat_id]["auto_count"] = count
+    user_states[chat_id] = "waiting_for_pin"
+    
+    send_message(
+        chat_id,
+        f"📌 *Закреплять ли публикации?*\n\n"
+        f"Текст: `{user_data[chat_id]['auto_text'][:50]}{'...' if len(user_data[chat_id]['auto_text']) > 50 else ''}`\n"
+        f"Интервал: *{user_data[chat_id]['auto_interval']} минут*\n"
+        f"Количество: *{count} раз*\n\n"
+        f"Выберите опцию:",
+        reply_markup=get_pin_keyboard()
+    )
+
+def handle_pin_choice(chat_id, choice):
+    """Обработка выбора закрепления"""
     auto_text = user_data[chat_id].get("auto_text")
     interval = user_data[chat_id].get("auto_interval")
+    count = user_data[chat_id].get("auto_count")
     
-    if not auto_text or not interval:
+    if not auto_text or not interval or not count:
         send_message(chat_id, "❌ Ошибка: данные не найдены. Начните заново /start")
         user_states.pop(chat_id, None)
         return
+    
+    should_pin = choice == "pin_yes"
     
     # Создаем задачу автопубликации
     auto_pub = {
@@ -526,6 +590,8 @@ def handle_auto_count(chat_id, text):
         "total_count": count,
         "published_count": 0,
         "active": True,
+        "should_pin": should_pin,
+        "current_pinned_id": None,  # ID закрепленного сообщения
         "created_at": datetime.now().isoformat()
     }
     
@@ -538,12 +604,15 @@ def handle_auto_count(chat_id, text):
     # Запускаем автопубликацию
     schedule_auto_publication(chat_id, auto_pub)
     
+    pin_text = "с закреплением" if should_pin else "без закрепления"
+    
     send_message(
         chat_id,
         f"✅ *Автопубликация настроена!*\n\n"
         f"📝 Текст: `{auto_text[:50]}{'...' if len(auto_text) > 50 else ''}`\n"
         f"⏱ Интервал: *{interval} минут*\n"
-        f"🔢 Количество: *{count} раз*\n\n"
+        f"🔢 Количество: *{count} раз*\n"
+        f"📌 Закрепление: *{pin_text}*\n\n"
         f"🔄 Первая публикация будет отправлена сейчас!",
         reply_markup=get_main_keyboard()
     )
@@ -551,6 +620,7 @@ def handle_auto_count(chat_id, text):
     user_states.pop(chat_id, None)
     user_data[chat_id].pop("auto_text", None)
     user_data[chat_id].pop("auto_interval", None)
+    user_data[chat_id].pop("auto_count", None)
     
     # Отправляем первую публикацию сразу
     send_auto_publication(chat_id, auto_pub)
@@ -558,18 +628,60 @@ def handle_auto_count(chat_id, text):
 def send_auto_publication(chat_id, auto_pub):
     """Отправка одной автопубликации"""
     try:
+        # Отправляем сообщение
         result = send_to_channel(auto_pub["text"])
         
         if result.get("ok"):
+            message_id = result["result"]["message_id"]
             auto_pub["published_count"] += 1
+            
+            # Если нужно закреплять
+            if auto_pub.get("should_pin", False):
+                # Открепляем предыдущее, если есть
+                if auto_pub.get("current_pinned_id"):
+                    unpin_message(CHANNEL_ID, auto_pub["current_pinned_id"])
+                
+                # Закрепляем новое
+                pin_message(CHANNEL_ID, message_id)
+                auto_pub["current_pinned_id"] = message_id
+            
             logger.info(f"✅ Автопубликация {auto_pub['id']} отправлена ({auto_pub['published_count']}/{auto_pub['total_count']})")
             save_data()
+            
+            # Если это не последняя публикация, планируем замену текущего поста
+            if auto_pub["published_count"] <= auto_pub["total_count"]:
+                current_template = user_data[chat_id].get("template", "⚠️ Этот пост был автоматически заменён по шаблону.")
+                
+                # Создаем задачу на замену
+                publication = {
+                    "message_id": message_id,
+                    "replace_at": datetime.now() + timedelta(minutes=auto_pub["interval_minutes"]),
+                    "template": current_template,
+                    "chat_id": CHANNEL_ID,
+                    "is_auto": True,
+                    "auto_id": auto_pub["id"]
+                }
+                
+                if "publications" not in user_data[chat_id]:
+                    user_data[chat_id]["publications"] = []
+                
+                user_data[chat_id]["publications"].append(publication)
+                save_data()
+                
+                # Планируем замену
+                schedule_replacement(chat_id, publication)
             
             # Проверяем, достигнуто ли нужное количество
             if auto_pub["published_count"] >= auto_pub["total_count"]:
                 auto_pub["active"] = False
                 save_data()
                 logger.info(f"✅ Автопубликация {auto_pub['id']} завершена")
+                
+                # Открепляем последнее сообщение если было закреплено
+                if auto_pub.get("should_pin", False) and auto_pub.get("current_pinned_id"):
+                    unpin_message(CHANNEL_ID, auto_pub["current_pinned_id"])
+                    auto_pub["current_pinned_id"] = None
+                    save_data()
                 
                 # Уведомляем пользователя
                 send_message(
@@ -634,6 +746,22 @@ def schedule_replacement(chat_id, publication):
                 return
             
             template = found_pub["template"]
+            
+            # Если это автопубликация, проверяем нужно ли откреплять
+            if found_pub.get("is_auto", False):
+                auto_id = found_pub.get("auto_id")
+                if auto_id:
+                    # Находим задачу автопубликации
+                    for auto_pub in user_data[chat_id].get("auto_publications", []):
+                        if auto_pub["id"] == auto_id:
+                            # Если сообщение было закреплено, открепляем его
+                            if auto_pub.get("should_pin", False) and auto_pub.get("current_pinned_id") == publication["message_id"]:
+                                unpin_message(CHANNEL_ID, publication["message_id"])
+                                auto_pub["current_pinned_id"] = None
+                                save_data()
+                            break
+            
+            # Заменяем сообщение
             result = edit_message(CHANNEL_ID, publication["message_id"], template)
             
             if result.get("ok"):
@@ -641,6 +769,7 @@ def schedule_replacement(chat_id, publication):
             else:
                 logger.error(f"❌ Ошибка замены поста: {result}")
             
+            # Удаляем из списка
             user_data[chat_id]["publications"] = [
                 pub for pub in publications 
                 if pub["message_id"] != publication["message_id"]
@@ -718,6 +847,8 @@ def webhook():
                 handle_auto_publish_callback(chat_id)
             elif data == "back_to_menu":
                 handle_back_to_menu(chat_id)
+            elif data == "pin_yes" or data == "pin_no":
+                handle_pin_choice(chat_id, data)
         
         return jsonify({"status": "ok"})
     except Exception as e:
@@ -729,16 +860,4 @@ if __name__ == "__main__":
     load_data()
     
     webhook_url = os.getenv("RENDER_EXTERNAL_URL", "http://localhost:5000")
-    set_webhook_url = f"{BASE_URL}/setWebhook?url={webhook_url}"
-    response = requests.get(set_webhook_url)
-    
-    if response.status_code == 200:
-        logger.info(f"✅ Вебхук установлен: {webhook_url}")
-    else:
-        logger.error(f"❌ Ошибка установки вебхука: {response.status_code}")
-    
-    ping_bot()
-    
-    logger.info(f"🚀 Бот запущен! Разрешено пользователей: {len(ALLOWED_USERS)}")
-    logger.info(f"👥 ID администраторов: {ALLOWED_USERS}")
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+   
